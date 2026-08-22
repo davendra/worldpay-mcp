@@ -10,7 +10,8 @@
 **A [Model Context Protocol](https://modelcontextprotocol.io/) server that lets AI agents and coding assistants take payments, manage them, create tokens, generate pay-by-link pages and query payment history through [Access Worldpay](https://developer.worldpay.com/) — nine tools, two transports, one `npx` command.**
 
 [![npm version](https://img.shields.io/npm/v/%40worldpay%2Fworldpay-mcp?logo=npm&logoColor=white&color=ff1f3e)](https://www.npmjs.com/package/@worldpay/worldpay-mcp)
-![MCP SDK 1.26](https://img.shields.io/badge/MCP_SDK-1.26-4c12a1)
+![MCP SDK 1.30](https://img.shields.io/badge/MCP_SDK-1.30-4c12a1)
+![Security hardened](https://img.shields.io/badge/security-hardened-11a871)
 ![TypeScript 5.9](https://img.shields.io/badge/TypeScript-5.9-1b1b6f?logo=typescript&logoColor=white)
 ![Node 20+](https://img.shields.io/badge/Node-20%2B-11a871?logo=node.js&logoColor=white)
 ![Tools 9](https://img.shields.io/badge/tools-9-3bcff0)
@@ -18,11 +19,11 @@
 ![Docker](https://img.shields.io/badge/Docker-node%3A20--alpine-495057?logo=docker&logoColor=white)
 [![License: custom](https://img.shields.io/badge/license-Worldpay_custom-acb0b5)](LICENSE)
 
-**[Quick start](#quick-start)** · [Connect your client](#connect-your-client) · [Architecture](docs/architecture.md) · [Business flows](docs/business-flows.md) · [Tool reference](docs/tools.md) · [Security](docs/security.md) · [Troubleshooting](docs/troubleshooting.md)
+**[Quick start](#quick-start)** · [Connect your client](#connect-your-client) · [Architecture](docs/architecture.md) · [Business flows](docs/business-flows.md) · [Tool reference](docs/tools.md) · [Security](docs/security.md) · [Troubleshooting](docs/troubleshooting.md) · [Security hardening](SECURITY-HARDENING.md)
 
 </div>
 
-> **Community documentation fork.** This is a fork of [`Worldpay/worldpay-mcp`](https://github.com/Worldpay/worldpay-mcp) carrying a comprehensive documentation set, proposed upstream as a pull request. It is **not** an official Worldpay publication and changes **no code** — everything described here is the behaviour of the upstream server at commit [`e674e2a`](https://github.com/Worldpay/worldpay-mcp/commit/e674e2a). Install the official package from npm; treat this repository as the manual.
+> **Enhanced, security-hardened fork.** This is an independent fork of [`Worldpay/worldpay-mcp`](https://github.com/Worldpay/worldpay-mcp) that adds two things to the upstream server: (1) a comprehensive documentation set, and (2) a **security-hardening and MCP-standards-update pass** — full writeup in **[SECURITY-HARDENING.md](SECURITY-HARDENING.md)**. It is **not** affiliated with or endorsed by Worldpay. The official package is on npm (`@worldpay/worldpay-mcp`); this repository is a documented, hardened variant, and the docs below describe **this fork's** code.
 
 ---
 
@@ -70,7 +71,7 @@ flowchart LR
         HTTP["Streamable HTTP<br/><code>server-http.js</code> · Express · :3001<br/>POST/GET/DELETE <code>/mcp</code> · <code>/healthz</code> · <code>/readyz</code>"]
     end
 
-    subgraph Server["WorldpayMCPServer (McpServer, SDK 1.26)"]
+    subgraph Server["WorldpayMCPServer (McpServer, SDK 1.30)"]
         REG["registerTools()<br/>9 × MCPTool"]
         API["WorldpayAPI<br/>Basic auth · fetch"]
         HPP["CreateHPPTransaction<br/>(direct fetch)"]
@@ -100,12 +101,12 @@ flowchart LR
     HPP -.-> LOG
 ```
 
-**Three layers, one direction.** A transport receives JSON-RPC from the client and hands it to `WorldpayMCPServer`, which extends the SDK's `McpServer` and registers each tool with its Zod input schema. The SDK validates the arguments; the tool's `execute()` calls `WorldpayAPI`, which builds the Worldpay request, attaches HTTP Basic credentials from the environment and issues a single `fetch`. The raw Worldpay JSON comes back as a single `text` content block. Full detail, including the class structure and the error model, in **[docs/architecture.md](docs/architecture.md)**.
+**Three layers, one direction.** A transport receives JSON-RPC from the client and hands it to `WorldpayMCPServer`, which extends the SDK's `McpServer` and registers each tool with its Zod input schema. The SDK validates the arguments; the tool's `execute()` calls `WorldpayAPI`, which builds the Worldpay request, attaches HTTP Basic credentials from the environment and issues a single `fetch` (with a timeout). The raw Worldpay JSON comes back as a single `text` content block. Full detail, including the class structure and the error model, in **[docs/architecture.md](docs/architecture.md)**.
 
 | Component | File | Role |
 |---|---|---|
 | stdio entrypoint | [`src/server-stdio.ts`](src/server-stdio.ts) | Default for `npx` and the Docker image; reads config from env |
-| HTTP entrypoint | [`src/server-http.ts`](src/server-http.ts) | Streamable HTTP on port 3001 with health endpoints and hardened headers |
+| HTTP entrypoint | [`src/server-http.ts`](src/server-http.ts) | Streamable HTTP on port 3001 — bearer auth, DNS-rebinding protection, localhost bind, health endpoints, hardened headers |
 | Server | [`src/worldpay-mcp-server.ts`](src/worldpay-mcp-server.ts) | Extends `McpServer`; instantiates and registers the nine tools |
 | Tool base | [`src/tools/mcp-tool.ts`](src/tools/mcp-tool.ts) | Name, title, description, Zod shape, `execute()` |
 | API client | [`src/api/worldpay.ts`](src/api/worldpay.ts) | Request building, auth, the five Worldpay calls |
@@ -134,7 +135,7 @@ sequenceDiagram
     S->>S: validate args against paymentSchema<br/>(defaults: currency=GBP, storeCard=false, createToken=false)
     S->>X: execute(args)
     X->>A: takeGuestPayment(args)
-    A->>A: createRequest()<br/>sessionHref → checkout instrument<br/>tokenHref → token instrument<br/>channel=moto · narrative="MCP Payment" · TR{timestamp}
+    A->>A: createRequest()<br/>sessionHref → checkout instrument<br/>tokenHref → token instrument<br/>channel (default moto) · narrative (default "MCP Payment") · TR-{uuid}
     A-->>L: info: POST …/api/payments with params
     A->>W: POST body · Authorization: Basic · WP-Api-Version: 2024-06-01
     W-->>A: 201/202 JSON (+ wp-correlationid)
@@ -143,15 +144,15 @@ sequenceDiagram
     X-->>S: ToolCallResponse{content:[{type:"text", text: JSON}]}
     S-->>T: result
     T-->>C: tool result
-    Note over A,X: non-2xx → Error("Payment failed with status …")<br/>→ ToolCallResponseError{isError:true}
+    Note over A,X: non-2xx → sanitized Error("… status N (correlationId …)")<br/>→ ToolCallResponseError{isError:true} — full body logged server-side
 ```
 
 Every tool follows this shape. Points worth knowing before you build on it:
 
 - **Validation happens in the SDK**, before tool code runs. A missing required field is a JSON-RPC error, not a Worldpay error.
 - **Responses are unshaped.** The tool result is Worldpay's body as a JSON string — including the HAL `_links` you need for follow-on actions.
-- **Errors are prose.** Non-2xx responses become `Payment failed with status 400: {…}` inside an `isError` result. The HTTP status is in the string, not a field.
-- **No retries, no timeouts, no idempotency keys.** One `fetch` per tool call. See [Security → operational notes](docs/security.md#operational-notes).
+- **Errors are sanitized.** Non-2xx responses become a status-only message (with the Worldpay correlation id) inside an `isError` result; the full upstream body is logged server-side, not returned to the model.
+- **Timeouts on every call** (`WORLDPAY_TIMEOUT_MS`, default 30s). Retries are the caller's responsibility, made safe by a caller-supplyable `transactionReference`. See [Security → operational notes](docs/security.md#operational-notes).
 
 ---
 
@@ -188,7 +189,7 @@ Nine tools; no resources or prompts are implemented. Names, titles and schemas b
 | `query_account_payouts` | Search payouts by state, dates, payee, amounts, instrument | Payment Queries (`GET /paymentQueries/payments`, with `entity`) | Read-only |
 | `create_delegate_token` | Create an Agentic Commerce Protocol delegate payment token for an ACP checkout session | ACP Sessions (`POST /sessions/agentic_commerce/delegate_payment`) | **Creates** a spend-limited token |
 
-> The server does not currently set MCP tool annotations (`readOnlyHint`, `destructiveHint`), so clients cannot distinguish the read-only queries from the money-moving tools automatically. Configure your client's approval policy accordingly — see [Security](docs/security.md#tool-approval-policy).
+> All nine tools declare MCP **annotations** (`readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`), so a client can tell the four read-only `query_*` tools apart from the money-moving ones in its approval UI. Set your approval policy accordingly — see [Security](docs/security.md#tool-approval-policy).
 
 ---
 
@@ -217,7 +218,7 @@ Nothing prints to the terminal — that is correct for a stdio MCP server (stdou
 ### Option B — clone and build
 
 ```bash
-git clone https://github.com/Worldpay/worldpay-mcp.git
+git clone https://github.com/davendra/worldpay-mcp.git
 cd worldpay-mcp
 cp .env.example .env        # then fill in the four values
 npm install
@@ -250,7 +251,7 @@ docker run -i --rm --env-file .env worldpay/mcp
 Use `-i` so the MCP client can talk to the container over stdin/stdout. To run the HTTP transport in Docker instead, override the command:
 
 ```bash
-docker run --rm -p 3001:3001 --env-file .env worldpay/mcp node dist/server-http.js
+docker run --rm -p 3001:3001 -e HOST=0.0.0.0 -e MCP_AUTH_TOKEN=$(openssl rand -hex 32) --env-file .env worldpay/mcp node dist/server-http.js
 ```
 
 ### Verify with the MCP Inspector
@@ -371,7 +372,7 @@ MERCHANT_ENTITY = "your-merchant-entity"
 <details>
 <summary><b>Streamable HTTP clients</b> — any host that supports remote MCP</summary>
 
-Run `npm start` (or the Docker HTTP variant) and point the client at `http://localhost:3001/mcp`. The server issues an `Mcp-Session-Id` on initialise and expects it on subsequent requests. **One caveat:** the current build binds a single MCP session per process — a second concurrent `initialize` returns HTTP 500 (`Internal Server Error`), so run one process per client rather than sharing one across many. **The HTTP transport also has no built-in authentication** — it is designed to run on a trusted network or behind a proxy that authenticates callers; see [Security](docs/security.md#choosing-a-transport).
+The HTTP transport **requires a bearer token**: set `MCP_AUTH_TOKEN` (the server refuses to start without it) and send `Authorization: Bearer <token>` on every `/mcp` request. It binds to `127.0.0.1` by default (`HOST` to change), enforces DNS-rebinding protection, and issues a secure random `Mcp-Session-Id` per session (concurrent sessions are supported, capped and idle-expired). Run `npm start`, point the client at `http://localhost:3001/mcp`, and keep it on a private network / behind an authenticating proxy for defence in depth. See [Security](docs/security.md#choosing-a-transport).
 </details>
 
 ---
@@ -386,21 +387,28 @@ All configuration is via environment variables (a `.env` file in the working dir
 | `WORLDPAY_PASSWORD` | yes | — | Access Worldpay API password (HTTP Basic) |
 | `WORLDPAY_URL` | yes | — | API base URL. Sandbox: `https://try.access.worldpay.com`. Use your production Access Worldpay host when live. |
 | `MERCHANT_ENTITY` | yes | — | Merchant entity reference; sent as `merchant.entity` on payments and hosted pages, and as `entity` on payout queries |
-| `CORS_ORIGIN` | no | `*` | HTTP transport only — value for `Access-Control-Allow-Origin` |
+| `WORLDPAY_TIMEOUT_MS` | no | `30000` | Outbound request timeout (ms) |
+| `LOG_LEVEL` / `LOG_FILE` | no | `info` / `worldpay-mcp.log` | Log verbosity and destination (contents are redacted; treat as sensitive) |
+| `MCP_AUTH_TOKEN` | **HTTP only, required** | — | Bearer token clients must present on `/mcp`. The HTTP transport refuses to start without it |
+| `HOST` | HTTP only | `127.0.0.1` | Interface to bind. Do not expose publicly without a proxy |
+| `PORT` | HTTP only | `3001` | HTTP listen port |
+| `CORS_ORIGIN` | HTTP only | (same-origin) | Comma-separated browser origin allowlist. Never `*` with credentials |
+| `MCP_ALLOWED_HOSTS` | HTTP only | bind host | Extra `Host` values accepted (DNS-rebinding allowlist) |
+| `MCP_MAX_SESSIONS` / `MCP_SESSION_TTL_MS` | HTTP only | `100` / `1800000` | Concurrent-session cap and idle timeout (ms) |
 
-The required variables are read at start-up but **not validated** — a missing value surfaces at the first tool call as a failed request rather than a start-up error. See [Troubleshooting](docs/troubleshooting.md#the-server-starts-but-every-tool-call-fails).
+Required variables are validated at start-up: a missing value (or a missing `MCP_AUTH_TOKEN` for the HTTP transport) fails fast with a clear message and a non-zero exit, rather than surfacing at the first tool call.
 
-Fixed behaviours you cannot currently configure (all in [`src/api/worldpay.ts`](src/api/worldpay.ts) and [`src/tools/hpp/CreateHPPTransaction.ts`](src/tools/hpp/CreateHPPTransaction.ts)):
+Behaviours with sensible defaults you can override per call or via env:
 
-| Behaviour | Value |
-|---|---|
-| Payment channel | `moto` on every `take_guest_payment` / `create_worldpay_token` |
-| Statement narrative | `MCP Payment` on payments and hosted pages |
-| Transaction reference | `TR<unix-ms>` generated per call |
-| Hosted page expiry | 3600 seconds |
-| HTTP port | 3001 |
-| Log file | `./worldpay-mcp.log`, level `info` |
-| API versions | `WP-Api-Version: 2024-06-01` (payments, manage); `API-Version: 2025-09-29` (ACP) |
+| Behaviour | Default | Override |
+|---|---|---|
+| Payment channel | `moto` | `channel` input (`moto` / `ecommerce` / `recurring`) |
+| Statement narrative | `MCP Payment` | `narrative` input (≤24 chars) |
+| Transaction reference | generated `TR-<uuid>` | `transactionReference` input (reuse for idempotent retries) |
+| Hosted page expiry | 3600 seconds | — |
+| Request timeout | 30 s | `WORLDPAY_TIMEOUT_MS` |
+| HTTP port / host | 3001 / 127.0.0.1 | `PORT` / `HOST` |
+| API versions | `WP-Api-Version: 2024-06-01`; `API-Version: 2025-09-29` | — |
 
 ---
 
@@ -409,10 +417,10 @@ Fixed behaviours you cannot currently configure (all in [`src/api/worldpay.ts`](
 Short version — the long version is **[docs/security.md](docs/security.md)**.
 
 - **Credentials** are your Access Worldpay API username and password, held only in environment variables and sent as HTTP Basic on every call. Scope them to the least you need (a sandbox pair while developing) and never commit `.env`.
-- **Card data.** `take_guest_payment` and `create_worldpay_token` never see a card number — they take a Checkout `sessionHref` or a stored `tokenHref`, which is the PCI-friendly design. `create_delegate_token` is the exception: the ACP schema accepts a PAN and CVC, and those values pass through the model's context and the client's transcript before reaching the server. Use network tokens where you can and understand your scope before enabling that tool.
-- **The log file** (`worldpay-mcp.log`) records every outbound URL and, for payment calls, the full tool arguments. Treat it as sensitive; rotate it; don't ship it.
-- **Transports.** stdio is the right choice for a local assistant — the process inherits the user's permissions and nothing listens on the network. The HTTP transport hardens its responses (strict CSP, `nosniff`, `DENY` framing) but does not authenticate callers; run it behind something that does.
-- **Approval policy.** Because no tool carries annotations, set your client to require approval for `take_guest_payment`, `create_worldpay_token`, `manage_payment`, `create_hosted_payment` and `create_delegate_token`, and allow the four `query_*` tools to run unprompted if you wish.
+- **Card data.** `take_guest_payment` and `create_worldpay_token` never see a card number — they take a Checkout `sessionHref` or a stored `tokenHref`. `create_delegate_token` accepts **network tokens only** (raw PANs / `fpan` are rejected by the schema), so no primary account number transits the model context.
+- **The log file** (`worldpay-mcp.log`) is **redacted** — card, CVC, billing and href fields are masked before writing, and upstream error bodies are logged server-side only. Still treat it as sensitive and rotate it.
+- **Transports.** stdio is the right choice for a local assistant. The HTTP transport requires a bearer token (`MCP_AUTH_TOKEN`), binds to localhost by default, and enforces DNS-rebinding protection and non-`*` CORS; keep it behind an authenticating proxy for defence in depth.
+- **Approval policy.** The tools carry annotations, so a client can auto-classify them; still require approval for `take_guest_payment`, `create_worldpay_token`, `manage_payment`, `create_hosted_payment` and `create_delegate_token`, and allow the four read-only `query_*` tools unprompted if you wish.
 - **Reporting.** Vulnerabilities go to Worldpay's [HackerOne programme](https://hackerone.com/worldpay), per [SECURITY.md](SECURITY.md).
 
 ---
@@ -423,7 +431,7 @@ Short version — the long version is **[docs/security.md](docs/security.md)**.
 npm test
 ```
 
-Five Jest suites (`ts-jest`, `@fetch-mock/jest`) exercise `create_hosted_payment`, `take_guest_payment`, `manage_payment`, `query_payments_by_date` and `query_account_payouts` against mocked Worldpay responses — no network, no credentials. They pass with the plain command above (verified on Node 22); the CI workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs build + test on Node 20 and 22.
+Jest (`ts-jest`, `@fetch-mock/jest`) — **17 tests across 8 suites**: the tool suites against mocked Worldpay responses, plus security suites for the SSRF/credential guard, log redaction, and schema rejection (bad amounts, non-ISO currency, raw PANs, path-traversal ids). No network, no credentials. Verified on Node 22; the CI workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs build + test on Node 20 and 22.
 
 ---
 
@@ -433,8 +441,8 @@ Five Jest suites (`ts-jest`, `@fetch-mock/jest`) exercise `create_hosted_payment
 worldpay-mcp/
 ├── src/
 │   ├── server-stdio.ts            # stdio entrypoint (npm bin, Docker CMD)
-│   ├── server-http.ts             # Streamable HTTP entrypoint, port 3001
-│   ├── server-sse.ts              # legacy entrypoint — see docs/architecture.md
+│   ├── server-http.ts             # Streamable HTTP entrypoint (bearer auth, DNS-rebind)
+│   ├── config.ts                  # env loading/validation + version
 │   ├── worldpay-mcp-server.ts     # WorldpayMCPServer extends McpServer; registers 9 tools
 │   ├── api/worldpay.ts            # WorldpayAPI: auth, request building, 5 Worldpay calls
 │   ├── schemas/schemas.ts         # Zod input schemas for every tool
@@ -444,9 +452,9 @@ worldpay-mcp/
 │   │   ├── payments/              # take_guest_payment, create_worldpay_token, manage_payment, query_*
 │   │   ├── payouts/               # query_account_payouts
 │   │   └── sessions/              # create_delegate_token (ACP)
-│   ├── transports/                # StdioTransport, HTTPTransport (Express), SSETransport
+│   ├── transports/                # StdioTransport, HTTPTransport (Express)
 │   ├── types/                     # generated Worldpay API typings (.d.ts)
-│   └── utils/                     # logger (winston → file), mcp-response
+│   └── utils/                     # logger (redacting), redact, mcp-response
 ├── tests/                         # Jest suites + fetch-mock setup
 ├── docs/                          # this documentation set
 ├── Dockerfile · jest.config.ts · tsconfig.json · .env.example
@@ -462,13 +470,13 @@ Access Worldpay products the server does **not** expose today, stated so you don
 
 ## A note on accuracy
 
-These docs describe what the code does at upstream commit `e674e2a` (18 Feb 2026, package version `1.1.0`; npm `latest` is `1.0.3`, which contains the same nine tools). Every behavioural statement traces to a file in `src/` — where the code is opinionated (MOTO channel, fixed narrative, generated references) the docs say so rather than describe an ideal. The server reports itself to clients as `Worldpay` version `1.0.3` regardless of the package version. If you find a discrepancy between these docs and the code, the code is right — please open an issue.
+These docs describe **this fork's** code (package version `1.1.0`; the server reports `Worldpay` `1.1.0`, read from `package.json`). It adds a security-hardening pass over upstream commit `e674e2a` — see **[SECURITY-HARDENING.md](SECURITY-HARDENING.md)** for exactly what changed and why. Every behavioural statement traces to a file in `src/`. MCP **resources** and **prompts** are still not implemented. If you find a discrepancy between these docs and the code, the code is right — please open an issue.
 
 ---
 
 ## Contributing
 
-Build, test and propose changes as described in [CONTRIBUTING.md](CONTRIBUTING.md). Bug reports and documentation fixes are welcome as issues or pull requests against [`Worldpay/worldpay-mcp`](https://github.com/Worldpay/worldpay-mcp). Security issues: [HackerOne](https://hackerone.com/worldpay), not the public tracker.
+Build, test and propose changes as described in [CONTRIBUTING.md](CONTRIBUTING.md). This is an independent fork; upstream bug reports belong at [`Worldpay/worldpay-mcp`](https://github.com/Worldpay/worldpay-mcp). Security issues in the upstream product go to Worldpay's [HackerOne programme](https://hackerone.com/worldpay), not a public tracker.
 
 ---
 
@@ -479,5 +487,5 @@ Copyright © 2025 Worldpay, LLC. The software is supplied under Worldpay's own l
 ---
 
 <div align="center">
-<sub>Documentation set written by <a href="https://www.davendra.com">Davendra Patel</a> · August 2026 · <a href="https://github.com/Worldpay/worldpay-mcp">upstream</a> · <a href="https://www.npmjs.com/package/@worldpay/worldpay-mcp">npm</a> · <a href="https://developer.worldpay.com/">Access Worldpay docs</a></sub>
+<sub>Documentation &amp; security hardening by <a href="https://www.davendra.com">Davendra Patel</a> · August 2026 · <a href="https://github.com/Worldpay/worldpay-mcp">upstream</a> · <a href="https://www.npmjs.com/package/@worldpay/worldpay-mcp">npm</a> · <a href="https://developer.worldpay.com/">Access Worldpay docs</a></sub>
 </div>

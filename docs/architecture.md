@@ -98,8 +98,8 @@ classDiagram
 
 | Layer | Files | Responsibility |
 |---|---|---|
-| **Entrypoints** | `src/server-stdio.ts`, `src/server-http.ts`, `src/server-sse.ts` | Read config from `process.env`, construct `WorldpayMCPServer`, connect a transport |
-| **Transports** | `src/transports/StdioTransport.ts`, `HTTPTransport.ts`, `SSETransport.ts`, `ServerTransport.ts` | Move JSON-RPC between client and server |
+| **Entrypoints** | `src/server-stdio.ts`, `src/server-http.ts` | Load + validate config (`src/config.ts`), construct `WorldpayMCPServer`, connect a transport |
+| **Transports** | `src/transports/StdioTransport.ts`, `HTTPTransport.ts`, `ServerTransport.ts` | Move JSON-RPC between client and server |
 | **Server** | `src/worldpay-mcp-server.ts` | Extend the SDK's `McpServer`; own one `WorldpayAPI`; register the tools |
 | **Tools** | `src/tools/mcp-tool.ts` + `src/tools/{hpp,payments,payouts,sessions}/*.ts` | One class per tool: name, title, description, Zod shape, `execute()` |
 | **Schemas** | `src/schemas/schemas.ts` | Eight Zod objects shared by the nine tools (the two payment tools share `paymentSchema`) |
@@ -117,23 +117,19 @@ The default. The package's `bin` points here, the Docker image's `CMD` runs it, 
 
 ### Streamable HTTP — `src/server-http.ts` → `src/transports/HTTPTransport.ts`
 
-An Express 5 app on port **3001** (hard-coded in the entrypoint) exposing:
+An Express 5 app on port **3001** (`PORT`), bound to **127.0.0.1** by default (`HOST`), exposing:
 
 | Route | Purpose |
 |---|---|
-| `POST /mcp` | JSON-RPC requests. A request without an `Mcp-Session-Id` header constructs a transport and connects it (an `initialize` body gets a new session id; a non-initialize body is rejected by the SDK first); subsequent requests carry the header. **The body is not inspected** to choose this path, and the server binds only one session at a time — see the note below |
+| `POST /mcp` | JSON-RPC requests. **Requires `Authorization: Bearer <MCP_AUTH_TOKEN>`** (401 otherwise). A request without an `Mcp-Session-Id` header starts a new session with a fresh `WorldpayMCPServer` instance and a secure random id; subsequent requests carry the header |
 | `GET /mcp` | Server-to-client event stream for an existing session |
 | `DELETE /mcp` | Ends a session |
 | `GET /healthz` | `{"status":"up"}` — liveness |
 | `GET /readyz` | `{"status":"ready"}` — readiness (no dependency check; always ready once listening) |
 
-Response hardening middleware sets a locked-down `Content-Security-Policy` (`default-src 'none'` …), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 1; mode=block`, `Referrer-Policy: no-referrer`, and disables `x-powered-by`. CORS is enabled with `origin: process.env.CORS_ORIGIN || "*"` and exposes the `Mcp-Session-Id` header so browser clients can read it.
+Response hardening middleware sets a locked-down `Content-Security-Policy` (`default-src 'none'` …), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 1; mode=block`, `Referrer-Policy: no-referrer`, and disables `x-powered-by`. **DNS-rebinding protection** validates the `Host` header against an allowlist (the bind host plus `MCP_ALLOWED_HOSTS`); a spoofed `Host` is rejected with 403. CORS is **same-origin by default** — cross-origin is allowed only for an explicit `CORS_ORIGIN` allowlist, never `*` with credentials.
 
-Sessions are held in an in-memory `Map` and removed when the SDK transport fires `onclose`; there is no TTL. **Single session per process:** the transport calls `this.server.connect(transport)` against one shared `WorldpayMCPServer` instance, and the SDK permits a server to be connected to only one transport at a time. A second concurrent `initialize` therefore fails — verified: the second call returns HTTP 500 `Internal Server Error`. Run one process per client; a stray non-initialize POST also consumes the single connection. This is an upstream limitation, not a deployment mistake.
-
-### "SSE" — `src/server-sse.ts`
-
-The upstream README describes this as the legacy SSE transport. In the current code `SSETransport` constructs a `StdioServerTransport` and starts it without connecting a `WorldpayMCPServer`, so running `node dist/server-sse.js` yields a process with no tools registered. Use `server-stdio.js` or `server-http.js`; this entrypoint is documented here only so you know not to reach for it.
+**A fresh `WorldpayMCPServer` is created per session** (never a shared instance), so concurrent sessions work. Sessions live in an in-memory `Map`, keyed by a secure random id, capped at `MCP_MAX_SESSIONS` (default 100) and evicted after `MCP_SESSION_TTL_MS` idle (default 30 min) or on `onclose`. **Authentication is by bearer token, independent of the session id** (per the MCP security spec, sessions are never used for auth). The server refuses to start the HTTP transport if `MCP_AUTH_TOKEN` is unset.
 
 ```mermaid
 flowchart TB
@@ -162,10 +158,10 @@ tools.forEach(tool => {
 
 Two consequences of this shape:
 
-- **The `extra` argument is not used.** Request metadata the SDK offers (auth info, session id, progress token, abort signal) is discarded at the dispatch closure. Tools therefore cannot be cancelled mid-flight and see no caller identity.
-- **No annotations.** `ToolDefinition` declares optional `readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`, but `getDefinition()` doesn't populate them, so `tools/list` advertises every tool identically. Approval policy has to be set on the client side by name — see [security.md](security.md#tool-approval-policy).
+- **The `extra` argument is not used.** Request metadata the SDK offers (progress token, abort signal) is discarded at the dispatch closure, so tools can't be cancelled mid-flight. Inbound authentication is handled at the HTTP transport (bearer token), not per tool.
+- **Annotations are set.** Every tool declares `readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint` via `getDefinition()`, so `tools/list` lets a client tell the read-only `query_*` tools from the money-moving ones — see [security.md](security.md#tool-approval-policy).
 
-Server identity as seen by clients on `initialize`: `{ name: "Worldpay", version: "1.0.3" }` (hard-coded in both entrypoints). Capabilities: `tools` only.
+Server identity as seen by clients on `initialize`: `{ name: "Worldpay", version: "1.1.0" }` (read from `package.json` via `src/config.ts`). Capabilities: `tools` only.
 
 ---
 
@@ -201,14 +197,14 @@ flowchart LR
     D -- no --> F["throw<br/>'Either sessionHref or tokenHref must be provided'"]
     C --> G
     E --> G
-    G["PaymentRequest<br/>transactionReference: TR{Date.now()}<br/>merchant.entity: MERCHANT_ENTITY<br/>channel: moto<br/>instruction.method: card<br/>instruction.narrative.line1: 'MCP Payment'<br/>instruction.value: {currency, amount}"]
+    G["PaymentRequest<br/>transactionReference: caller value or TR-{uuid}<br/>merchant.entity: MERCHANT_ENTITY<br/>channel: input (default moto)<br/>instruction.method: card<br/>instruction.narrative.line1: input (default 'MCP Payment')<br/>instruction.value: {currency, amount}"]
     G --> H{"storeCard?"}
     H -- yes --> I["+ customerAgreement<br/>type: cardOnFile · storedCardUsage: first"]
     G --> J{"createToken?"}
     J -- yes --> K["+ tokenCreation<br/>type: worldpay"]
 ```
 
-Three values are fixed by the server and not exposed as tool inputs: the **channel** (`moto`), the **statement narrative** (`MCP Payment`) and the **transaction reference** (`TR` + millisecond timestamp). If any of those matter for your interchange, statements or reconciliation, you will need to change the server, not the call.
+The **channel** (default `moto`), **statement narrative** (default `MCP Payment`) and **transaction reference** (default a generated `TR-<uuid>`) all have sensible defaults but are now optional tool inputs — set `channel` / `narrative` / `transactionReference` when interchange, statements or idempotent retries require it. Also guarded here: supplying **both** `sessionHref` and `tokenHref` is rejected (previously `sessionHref` silently won).
 
 ---
 
@@ -275,7 +271,7 @@ Read once at start-up in the entrypoints via `process.env` (with `dotenv/config`
 | `MERCHANT_ENTITY` | `merchant.entity` on payments/HPP; `entity` query param on payouts | |
 | `CORS_ORIGIN` | `HTTPTransport` only | defaults to `*` |
 
-None are validated at start-up; the entrypoints use non-null assertions. A missing `WORLDPAY_URL` produces a request to `undefined/api/payments` on first use.
+All four are **validated at start-up** by `src/config.ts` (and `MCP_AUTH_TOKEN` by the HTTP transport); a missing value fails fast with a clear message and a non-zero exit. Optional HTTP/behaviour vars: `MCP_AUTH_TOKEN` (required for HTTP), `HOST`, `PORT`, `CORS_ORIGIN`, `MCP_ALLOWED_HOSTS`, `MCP_MAX_SESSIONS`, `MCP_SESSION_TTL_MS`, `WORLDPAY_TIMEOUT_MS`, `LOG_LEVEL`, `LOG_FILE`.
 
 ---
 
@@ -283,8 +279,8 @@ None are validated at start-up; the entrypoints use non-null assertions. A missi
 
 - **TypeScript 5.9**, `target`/`module` ES2022, `strict`, `noUnusedLocals`, path alias `@/* → src/*` rewritten at build time by `tsc-alias`. Output in `dist/`, which is what the npm package ships (`files: ["dist/**/*"]`).
 - `npm run build` = `tsc --build && tsc-alias`. `npm start` runs the HTTP server; the npm `bin` runs the stdio server.
-- **Runtime dependencies:** `@modelcontextprotocol/sdk` 1.26, `express` 5, `winston` 3, `dotenv` 16, `node-fetch` 3 (declared; the code uses global `fetch`). `zod` arrives transitively via the SDK. `cors` is imported by the HTTP transport but declared under `devDependencies`; in practice it still resolves after `npm prune --production` because it is also a production transitive dependency of the MCP SDK — worth tidying to a direct dependency nonetheless.
-- **Docker:** single-stage `node:20-alpine`; installs, copies, builds, strips `src/` and dev dependencies, `EXPOSE 3001`, `CMD ["node","dist/server-stdio.js"]`.
+- **Runtime dependencies:** `@modelcontextprotocol/sdk` 1.30, `express` 5, `winston` 3, `dotenv` 16, `cors` 2, `zod` 4 — all declared directly (`zod` and `cors` are no longer relied on transitively; the unused `node-fetch` was removed; the code uses global `fetch`).
+- **Docker:** multi-stage `node:20-alpine` (build stage runs `npm ci` + build; runtime stage installs prod deps only and copies `dist/`), runs as the non-root `node` user, `CMD ["node","dist/server-stdio.js"]`.
 - **Tests:** Jest 29 + `ts-jest` + `@fetch-mock/jest`; `testMatch: **/*.test.ts`; path alias mapped from `tsconfig`. `npm test` passes without extra flags (verified on Node 22; CI runs it on 20 and 22).
 
 ---
@@ -295,13 +291,13 @@ Stated neutrally — these are the facts you design around.
 
 | Property | Current behaviour | Implication |
 |---|---|---|
-| Statelessness | No DB, no cache; HTTP sessions only in memory | Trivial to run many processes, though each binds one session (see the single-session note above); HTTP sessions don't survive a restart |
-| Idempotency | No idempotency key header; `transactionReference` is a millisecond timestamp the caller can't set | Retrying a failed `take_guest_payment` can create a second payment; two calls in the same millisecond share a reference |
-| Timeouts / retries | None; one `fetch`, no `AbortSignal` | A slow upstream call blocks the tool call until the client gives up |
+| Statelessness | No DB, no cache; HTTP sessions only in memory | Trivial to scale horizontally; sessions don't survive a restart |
+| Idempotency | `transactionReference` defaults to a generated UUID and is caller-supplyable | Reuse the same reference to make a retry idempotent; no more millisecond collisions |
+| Timeouts / retries | Every call has an `AbortSignal.timeout` (`WORLDPAY_TIMEOUT_MS`, default 30s) and `redirect:"error"` | A slow/redirecting upstream fails fast instead of hanging |
 | Rate limiting | None on either side | Put limits in the client or a proxy if agents will loop |
-| Response fidelity | Raw Worldpay JSON in a text block | Models see everything Worldpay returns, including `_links`; you get no summarisation for free |
-| Tool annotations | None | Clients can't auto-classify read vs write tools |
-| Pagination | `pageSize` honoured on date and payout queries; accepted but not forwarded on the transaction-reference query | Reference searches return Worldpay's default page |
-| Versioning | Package `1.1.0`; server reports `1.0.3`; npm latest `1.0.3` | Don't rely on the advertised server version to detect the build |
+| Response fidelity | Raw Worldpay JSON on success; errors sanitized to status + correlation id | Models see successful bodies incl. `_links`; upstream error bodies are logged server-side, not returned |
+| Tool annotations | Set on all 9 tools | Clients can auto-classify read-only vs money-moving tools |
+| Pagination | `pageSize` honoured on date, payout **and** transaction-reference queries | Consistent paging across the query tools |
+| Versioning | Server reports `1.1.0`, read from `package.json` | The advertised version matches the package |
 
 These are the natural next engineering items for anyone extending the server; they are listed as observations, not as a roadmap.

@@ -1,6 +1,15 @@
 # Changelog
 
-Reconstructed from the upstream commit history and tags. Dates are commit dates. The server's advertised MCP version has been `1.0.3` throughout; see [docs/architecture.md](docs/architecture.md#design-properties-worth-knowing).
+Reconstructed from the commit history and tags. Dates are commit dates.
+
+## Unreleased — security hardening & MCP standards update (2026-08-22, this fork)
+
+Independent security audit found 22 issues (2 critical, 4 high, 10 medium, 6 low); all fixed on this fork. Full writeup in [SECURITY-HARDENING.md](SECURITY-HARDENING.md). No public tool was removed except the dead SSE entrypoint.
+
+- **Security:** validate `manage_payment` `commandHref` is same-origin before attaching credentials (SSRF/credential-leak); require bearer auth on the HTTP `/mcp` transport (fail-closed) with DNS-rebinding protection, localhost bind, non-`*` CORS, session cap + TTL; a fresh MCP server instance per session; `create_delegate_token` accepts network tokens only (no raw PAN/CVC); redact CVC/PAN/billing/hrefs in logs; sanitize upstream error bodies.
+- **Correctness/robustness:** per-call timeouts; `encodeURIComponent` on `paymentId` (now required); tighter Zod validation (amounts, currency, URLs) and rejection of both card instruments; UUID / caller-supplyable `transactionReference`; configurable `channel` and `narrative`; `pageSize` forwarded on the transaction-reference query; defensive payouts parsing; start-up env validation; version read from `package.json`.
+- **Standards:** `@modelcontextprotocol/sdk` 1.26 → 1.30; MCP tool annotations on all 9 tools; transport security best practices (MCP spec 2025-11-25).
+- **Packaging:** `cors` and `zod` promoted to direct dependencies; `node-fetch` removed; `main` path fixed; multi-stage, non-root Dockerfile. Tests 5 → 17.
 
 ## 1.1.0 — 2026-02-18 (git tag; not published to npm)
 

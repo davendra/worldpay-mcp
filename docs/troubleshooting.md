@@ -12,9 +12,7 @@ The problems a first-time user actually hits, in the order they tend to hit them
 - [Where is the log file?](#where-is-the-log-file)
 - [The HTTP server answers `/healthz` but `/mcp` returns 400](#the-http-server-answers-healthz-but-mcp-returns-400)
 - [Docker: nothing listens on 3001](#docker-nothing-listens-on-3001)
-- [`server-sse.js` starts but exposes no tools](#server-ssejs-starts-but-exposes-no-tools)
-- [The client shows version 1.0.3 but I installed 1.1.0](#the-client-shows-version-103-but-i-installed-110)
-- [`query_payment_by_id` returns a 404 for `undefined`](#query_payment_by_id-returns-a-404-for-undefined)
+- [The HTTP server won't start, or returns 401](#the-http-server-wont-start-or-returns-401)
 - [Tests: `npm test` fails with an ESM or path-alias error](#tests-npm-test-fails-with-an-esm-or-path-alias-error)
 - [A tool call hangs](#a-tool-call-hangs)
 
@@ -32,7 +30,7 @@ The problems a first-time user actually hits, in the order they tend to hit them
    | WORLDPAY_USERNAME=x WORLDPAY_PASSWORD=x WORLDPAY_URL=https://try.access.worldpay.com MERCHANT_ENTITY=x \
      npx -y @worldpay/worldpay-mcp
    ```
-   A healthy server answers on one line with `"serverInfo":{"name":"Worldpay","version":"1.0.3"}`. No output, or a shell error, means the launch itself is broken. If `npx` can't be found, the client's `PATH` differs from your shell's — give the client an absolute path to `npx` (`which npx`) or to `node` plus `dist/server-stdio.js`. (For a local build, `npx -y @modelcontextprotocol/inspector --cli node dist/server-stdio.js --method tools/list` lists the nine tools.)
+   A healthy server answers on one line with `"serverInfo":{"name":"Worldpay","version":"1.1.0"}`. No output, or a shell error, means the launch itself is broken. If `npx` can't be found, the client's `PATH` differs from your shell's — give the client an absolute path to `npx` (`which npx`) or to `node` plus `dist/server-stdio.js`. (For a local build, `npx -y @modelcontextprotocol/inspector --cli node dist/server-stdio.js --method tools/list` lists the nine tools.)
 2. **Node version.** `node --version` ≥ 20. Desktop clients sometimes pick up a different Node than your terminal (nvm, Homebrew vs system). Use an absolute path to the right `node`.
 3. **Stdout is clean?** A stdio MCP server must write nothing but protocol to stdout. The server's logger writes to a file, so this is fine out of the box — but if you've wrapped it in a script that `echo`es, the client will reject the handshake.
 4. **Read the client's own log.** Claude Code: `~/.claude/logs/` (or the `--mcp-debug` flag); Claude Desktop: `~/Library/Logs/Claude/mcp*.log` (macOS); Cursor: Output panel → MCP.
@@ -53,13 +51,14 @@ The problems a first-time user actually hits, in the order they tend to hit them
 
 **Symptom.** `tools/list` works; any call returns an `isError` result.
 
-**Cause.** The four required env vars are read with non-null assertions and **not validated at start-up** (`src/server-stdio.ts`, `src/server-http.ts`). The process starts happily with nothing set and fails at first use.
+**Cause.** In older builds the required env vars were unvalidated. This build **validates them at start-up** (`src/config.ts`) and fails fast; if a tool call still fails, credentials are wrong or a var is set but empty.
 
 | Message | Missing |
 |---|---|
 | `… failed: Username and password required for Basic auth` (prefix varies by tool; **not** `create_hosted_payment`, which instead returns `Hosted Payment failed: … status 401`) | `WORLDPAY_USERNAME` or `WORLDPAY_PASSWORD` |
-| `… fetch failed` / `TypeError: Failed to parse URL from undefined/api/payments` | `WORLDPAY_URL` |
-| Worldpay 400 mentioning `entity` | `MERCHANT_ENTITY` (sent as the string `"undefined"`) |
+| Start-up error `Missing required environment variable(s): …` (exit 1) | any of `WORLDPAY_URL` / `WORLDPAY_USERNAME` / `WORLDPAY_PASSWORD` / `MERCHANT_ENTITY` |
+| Start-up error `WORLDPAY_URL is not a valid URL` | malformed `WORLDPAY_URL` |
+| Worldpay 401 on a call | wrong username/password for the environment |
 
 **Fix.** Set all four. For `npx` launches, pass them in the client config's `env` block — the server does not read your shell's `.env` unless it is in the process's working directory.
 
@@ -131,7 +130,7 @@ curl -s -D - http://localhost:3001/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 ```
 
-and reuse the `mcp-session-id` header it returns. **If you already sent a stray non-initialize POST to this process, restart the server first** — that rejected request has already consumed the single available session, and this `initialize` will otherwise return 500. Sessions live in memory and vanish on restart.
+and reuse the `mcp-session-id` header it returns. Concurrent sessions are supported (each gets its own server instance); sessions live in memory and vanish on restart. Remember every `/mcp` request also needs `Authorization: Bearer $MCP_AUTH_TOKEN`.
 
 ---
 
@@ -149,27 +148,15 @@ Note also that the original upstream README built the image as `worldpay/mcp` bu
 
 ---
 
-## `server-sse.js` starts but exposes no tools
+## The HTTP server won't start, or returns 401
 
-**Cause.** In the current code `SSETransport` starts a bare stdio transport without connecting a `WorldpayMCPServer` (`src/transports/SSETransport.ts`). The entrypoint logs "SSE server started successfully" and then does nothing useful.
+**Symptom.** `node dist/server-http.js` exits immediately, or `/mcp` returns `401 Unauthorized`.
 
-**Fix.** Use `server-stdio.js` or `server-http.js`. There is no SSE transport in this release.
-
----
-
-## The client shows version 1.0.3 but I installed 1.1.0
-
-**Cause.** Both entrypoints pass `version: "1.0.3"` to the MCP server identity regardless of `package.json`. npm `latest` is also `1.0.3`; `1.1.0` exists only as a git tag.
-
-**Fix.** Nothing to fix — the nine tools are identical across both. Don't use the advertised version to detect the build.
-
----
-
-## `query_payment_by_id` returns a 404 for `undefined`
-
-**Cause.** `paymentId` is optional in the schema, so an empty call is valid and produces `GET …/paymentQueries/payments/undefined`.
-
-**Fix.** Always supply `paymentId`. If the model is guessing, give it the ID or have it search by reference or date first.
+**Cause & fix.**
+- **Exits with `MCP_AUTH_TOKEN is required …`** — the HTTP transport is fail-closed: set a strong token (`export MCP_AUTH_TOKEN=$(openssl rand -hex 32)`) before starting. stdio needs no token.
+- **`/mcp` → 401** — send `Authorization: Bearer $MCP_AUTH_TOKEN`. `/healthz` and `/readyz` are intentionally open and need no token.
+- **`/mcp` → 403** — DNS-rebinding protection rejected the `Host` header. Reach the server on its bind address (default `127.0.0.1:3001`), or add the host you use to `MCP_ALLOWED_HOSTS`.
+- **`503 Server session limit reached`** — `MCP_MAX_SESSIONS` (default 100) is exhausted; idle sessions free up after `MCP_SESSION_TTL_MS`.
 
 ---
 
@@ -187,6 +174,6 @@ Note also that the original upstream README built the image as `worldpay/mcp` bu
 
 ## A tool call hangs
 
-**Cause.** The server sets no timeout on its outbound `fetch` and doesn't wire the MCP abort signal to it. A slow or unreachable Worldpay endpoint (wrong `WORLDPAY_URL`, firewall, DNS) blocks the call until the client gives up.
+**Cause.** Every outbound call now has a timeout (`WORLDPAY_TIMEOUT_MS`, default 30s), so a hung call fails with a timeout error rather than blocking forever. If calls are slow or timing out, the Worldpay endpoint is likely unreachable (wrong `WORLDPAY_URL`, firewall, DNS).
 
-**Fix.** Check reachability with `curl -m 10 -I "$WORLDPAY_URL"`; set a per-call timeout in your client if it offers one; and for autonomous agents, wrap calls with your own deadline.
+**Fix.** Check reachability with `curl -m 10 -I "$WORLDPAY_URL"`; lower or raise `WORLDPAY_TIMEOUT_MS` as needed; for autonomous agents, also set a per-call deadline in the client.

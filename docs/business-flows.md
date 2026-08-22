@@ -47,7 +47,7 @@ sequenceDiagram
     A-->>M: "Yes — authorised at 14:02, £45.00"
 ```
 
-**Product:** [Hosted Payment Pages](https://developer.worldpay.com/products/access/hosted-payment-pages). **Human in the loop:** the member of staff who sends the link; the agent never sees a card. **Fixed by the server:** expiry 3600 s, narrative `MCP Payment`, reference `TR<ms>` — if you need the link to carry an order number, note that the reference is not settable per call today.
+**Product:** [Hosted Payment Pages](https://developer.worldpay.com/products/access/hosted-payment-pages). **Human in the loop:** the member of staff who sends the link; the agent never sees a card. **Defaults:** expiry 3600 s; narrative defaults to `MCP Payment` (override with the `narrative` input); reference is a generated `TR-<uuid>`.
 
 ---
 
@@ -81,7 +81,7 @@ sequenceDiagram
     A-->>U: confirmation
 ```
 
-**Product:** [Payments API](https://developer.worldpay.com/products/access/payments/card-payment) + [Checkout](https://developer.worldpay.com/products/access/checkout/web/card-only). **Human in the loop:** approval of `take_guest_payment` in the client — it moves money. **Note:** every payment is sent with `channel: "moto"` (mail order / telephone order). That is the right channel for an agent taking a payment on a customer's behalf over chat or phone; check it fits your acquiring agreement before using the flow for e-commerce-style transactions.
+**Product:** [Payments API](https://developer.worldpay.com/products/access/payments/card-payment) + [Checkout](https://developer.worldpay.com/products/access/checkout/web/card-only). **Human in the loop:** approval of `take_guest_payment` in the client — it moves money. **Note:** `channel` defaults to `"moto"` (mail order / telephone order) — the right channel for an agent taking a payment over chat or phone — but is now a tool input (`moto` / `ecommerce` / `recurring`); set it to match your acquiring agreement.
 
 ---
 
@@ -190,7 +190,7 @@ sequenceDiagram
     participant M as Merchant ACP checkout
 
     U->>SA: "Buy this for up to $20"
-    SA->>SA: obtain payment method<br/>(network token preferred, fpan fallback)
+    SA->>SA: obtain a network token<br/>(raw PANs are not accepted)
     SA->>S: create_delegate_token {payment_method, allowance:{reason: one_time,<br/>max_amount: 2000, currency: "usd", checkout_session_id,<br/>merchant_id, expires_at}, billing_address?, risk_signals, metadata}
     S->>W: POST /sessions/agentic_commerce/delegate_payment<br/>API-Version 2025-09-29
     W-->>S: 201 { delegate token … }
@@ -202,7 +202,7 @@ sequenceDiagram
     SA-->>U: done
 ```
 
-**Product:** Access Worldpay's ACP delegate-payment session endpoint. **Schema notes:** ACP field names are `snake_case` (unlike the rest of the server); `allowance.currency` is **lowercase** ISO-4217 (`usd`), `allowance.max_amount` is in minor units; `risk_signals` and `metadata` are required (`metadata` is an empty-object schema). **Card data:** `payment_method.card_number_type` may be `fpan`, in which case `payment_method.number` is a full card number and `cvc` may be present — both pass through the agent's context before reaching Worldpay. Prefer `network_token`, and read [security.md](security.md#card-data-and-pci-scope) before enabling this tool in a production agent.
+**Product:** Access Worldpay's ACP delegate-payment session endpoint. **Schema notes:** ACP field names are `snake_case` (unlike the rest of the server); `allowance.currency` is **lowercase** ISO-4217 (`usd`), `allowance.max_amount` is in minor units; `risk_signals` and `metadata` are required (`metadata` is an empty-object schema). **Card data:** `payment_method.card_number_type` accepts **`network_token` only** — the schema rejects raw PANs (`fpan`), so no primary account number transits the agent's context. `payment_method.number` carries the network token with its `cryptogram` / `eci_value`. See [security.md](security.md#card-data-and-pci-scope).
 
 ---
 

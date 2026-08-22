@@ -56,17 +56,17 @@ Three things follow:
 |---|---|---|
 | How the client reaches it | Launches it as a child process; talks over stdin/stdout | Connects to `http://host:3001/mcp` |
 | Who can call it | Only the process that spawned it | Anything that can reach the port |
-| Built-in caller authentication | Not needed — inherits the launching user's session | **None.** The HTTP transport hardens its *responses* (strict CSP, `nosniff`, `X-Frame-Options: DENY`, `no-referrer`, no `x-powered-by`) but does not authenticate *requests* |
-| Sessions | n/a | In-memory `Mcp-Session-Id` map, no TTL; **one concurrent session per process** (a second `initialize` returns HTTP 500) |
-| Recommended for | Local assistants — Claude Code, Claude Desktop, Cursor, Codex | A single remote client, **behind a reverse proxy that authenticates** (mTLS, OAuth, a signed header from your gateway), on a private network. Not a shared multi-client endpoint — it binds one session per process |
+| Built-in caller authentication | Not needed — inherits the launching user's session | **Bearer token required** (`MCP_AUTH_TOKEN`); the server refuses to start without it, and `/mcp` returns 401 without a valid token. Responses are also hardened (strict CSP, `nosniff`, `X-Frame-Options: DENY`, `no-referrer`, no `x-powered-by`) |
+| Sessions | n/a | Secure random `Mcp-Session-Id` per session, a fresh server instance each; concurrent sessions supported, capped (`MCP_MAX_SESSIONS`) and idle-expired (`MCP_SESSION_TTL_MS`) |
+| Recommended for | Local assistants — Claude Code, Claude Desktop, Cursor, Codex | Remote/shared clients, on a private network and **behind a proxy** for defence in depth (the built-in bearer token is the minimum, not the whole story) |
 
-**Default to stdio.** It is the only configuration in which "who can call the server" is answered by the operating system rather than by something you have to build. If you do run HTTP, bind it to a private interface, put authentication in front of it, set `CORS_ORIGIN` to the exact origin of your client, and monitor `/healthz`.
+**Default to stdio** for local single-client use — "who can call the server" is answered by the operating system. For HTTP: set a strong random `MCP_AUTH_TOKEN`, keep the default `127.0.0.1` bind (or put a proxy in front for remote access), set `CORS_ORIGIN` to your client's exact origin only if a browser calls it, and monitor `/healthz`. DNS-rebinding protection is on by default.
 
 ---
 
 ## Tool approval policy
 
-The server does not set MCP tool annotations, so your client sees nine identical-looking tools. Set approval by name:
+All nine tools declare MCP annotations, so a client can auto-classify read-only vs money-moving tools. Still, set explicit approval by name — the annotations are a hint, not an enforcement:
 
 | Always require a human to approve | Safe to allow without a prompt (read-only) |
 |---|---|
@@ -86,19 +86,16 @@ The server is designed so that, for the main flows, **no primary account number 
 
 - `take_guest_payment` and `create_worldpay_token` take a **`sessionHref`** (Worldpay's Checkout SDK tokenised the card in the browser) or a **`tokenHref`** (a previously created Worldpay token). The agent handles references, not card numbers. A CVC can be supplied as `cvcSessionHref` for the same reason — prefer it over the raw `cvc` field.
 - `create_hosted_payment` moves the entire card interaction onto Worldpay's hosted page.
+- `create_delegate_token` (ACP) accepts **network tokens only** — its schema rejects `card_number_type: "fpan"`, so a raw primary account number cannot be passed as a tool argument and never transits the model context. Supply the network token with its `cryptogram` / `eci_value`.
 - The four `query_*` tools return Worldpay's own query responses (card details masked; the payout query, however, returns beneficiary bank details — see below).
 
-**The exception is `create_delegate_token`.** Its ACP schema allows `payment_method.card_number_type: "fpan"` with `number` as a full card number and an optional `cvc`. When used that way, the PAN and CVC are **produced by the model as tool arguments**, which means they transit the model's context window and the client's conversation log, and are then forwarded by the server unchanged. Before enabling this tool outside a sandbox:
-
-- prefer `card_number_type: "network_token"` (with `cryptogram` / `eci_value`) so the value in context is a network token, not a PAN;
-- confirm with whoever owns your PCI DSS scope that the agent, client and their logs are inside it if `fpan` is ever used;
-- check what your MCP client persists (conversation history, telemetry) — that is where an fpan would end up.
+No tool accepts a raw PAN. If you later re-introduce one, confirm with whoever owns your PCI DSS scope that the agent, client and their logs are inside it.
 
 ---
 
 ## Data that reaches the model
 
-Tool results are Worldpay's responses **verbatim**. Expect the model — and therefore your client's transcript — to see:
+Successful tool results are Worldpay's responses **verbatim** (errors are sanitized — see the last row). Expect the model — and therefore your client's transcript — to see:
 
 | Tool | Data in the result |
 |---|---|
@@ -106,7 +103,7 @@ Tool results are Worldpay's responses **verbatim**. Expect the model — and the
 | `query_*` payments | as above, per payment |
 | `query_account_payouts` | payee name, **IBAN / account number / SWIFT-BIC**, bank name, amounts, state, references |
 | `create_delegate_token` | the delegate token and its allowance |
-| any failure | Worldpay's error body, including validation messages |
+| any failure | a sanitized message: HTTP status + Worldpay correlation id (the full error body is logged server-side, not returned) |
 
 If your client stores conversations (most do), it now stores this. Decide retention for that store as you would for a payments log.
 
@@ -114,7 +111,7 @@ If your client stores conversations (most do), it now stores this. Decide retent
 
 ## The log file
 
-`worldpay-mcp.log` is written in the server's **working directory** (wherever the client launched it) at `info` level with no rotation. It contains every outbound request line, the **full tool arguments** for `take_guest_payment`, `create_worldpay_token` and `create_hosted_payment` (cardholder name, billing address, hrefs, and `cvc` if you supplied one directly), correlation IDs, and complete error bodies.
+`worldpay-mcp.log` is written in the server's **working directory** (wherever the client launched it) at `info` level (`LOG_LEVEL` / `LOG_FILE` to change), with no rotation. Sensitive fields are **redacted before writing** — CVC, card `number`, cardholder name, billing address, IBAN/account details and session/token hrefs are masked (`src/utils/redact.ts`), and upstream error bodies are logged server-side but truncated. It still records outbound request lines and correlation ids.
 
 Treat it as sensitive data:
 
@@ -131,11 +128,10 @@ It is covered by `.gitignore` (`*.log`), so it won't be committed by accident, b
 
 Properties of the current implementation that matter when an agent — rather than a person — is the caller:
 
-- **No idempotency key.** Each payment call generates `transactionReference: TR<millisecond timestamp>`. If a call times out after Worldpay accepted it, a retry is a *second* payment with a new reference. Build retry logic with a query first, or not at all.
-- **No timeouts.** A call waits as long as the upstream does. Set a tool-call timeout in the client.
+- **Idempotent retries are possible.** `transactionReference` defaults to a generated UUID but is caller-supplyable — reuse the same value to make a retry idempotent rather than create a second payment.
+- **Timeouts are enforced.** Every outbound call has an `AbortSignal.timeout` (`WORLDPAY_TIMEOUT_MS`, default 30s) and refuses redirects; still set a tool-call timeout in the client as a backstop.
 - **No rate limiting** on either side of the server. An agent in a loop can issue requests as fast as the client allows; cap it in the client or proxy.
-- **No cancellation.** The request's abort signal is not wired to the outbound fetch.
-- **Errors carry upstream bodies.** Useful for debugging; also means an error result can contain whatever Worldpay returned.
+- **Errors are sanitized.** An error result carries the HTTP status and Worldpay correlation id, not the raw upstream body (which is logged server-side).
 
 None of these are exotic — they are the normal list for a first-release integration server — but they shape what "safe to automate" means here: read-only first, approvals on writes, sandbox until proven.
 

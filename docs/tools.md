@@ -2,7 +2,7 @@
 
 Every tool the server advertises, exactly as returned by `tools/list` (verified with the MCP Inspector against the built server), with the Worldpay request it produces and what comes back. Schemas are transcribed from [`src/schemas/schemas.ts`](../src/schemas/schemas.ts); request building from [`src/api/worldpay.ts`](../src/api/worldpay.ts) and [`src/tools/hpp/CreateHPPTransaction.ts`](../src/tools/hpp/CreateHPPTransaction.ts).
 
-**Conventions.** Amounts are **minor units** (`1000` = £10.00). `currency` defaults to `GBP` where a default exists. Every result is a single `text` content block containing Worldpay's JSON response as a string; failures set `isError: true` with a prose message (see [architecture → error model](architecture.md#error-model)). The server sets no tool annotations, so the **Effect** column here is your guide to which tools need approval.
+**Conventions.** Amounts are **minor units** (`1000` = £10.00). `currency` defaults to `GBP` where a default exists. Every successful result is a single `text` content block containing Worldpay's JSON response as a string; failures set `isError: true` with a **sanitized** message — HTTP status + Worldpay correlation id, not the raw upstream body (see [architecture → error model](architecture.md#error-model)). All tools carry MCP **annotations** matching the **Effect** column, so a client can auto-classify them; the column is still your guide to which tools need approval.
 
 | Tool | Effect | Worldpay call |
 |---|---|---|
@@ -31,7 +31,7 @@ Every tool the server advertises, exactly as returned by `tools/list` (verified 
 
 ```json
 {
-  "transactionReference": "TR1755820800000",
+  "transactionReference": "TR-3f1b2c4d-…",
   "merchant": { "entity": "<MERCHANT_ENTITY>" },
   "expiry": 3600,
   "narrative": { "line1": "MCP Payment" },
@@ -65,17 +65,20 @@ Every tool the server advertises, exactly as returned by `tools/list` (verified 
 | `address1` | string | yes | Billing address line 1 |
 | `city` | string | yes | |
 | `postalCode` | string | no | |
-| `countryCode` | string | yes | ISO 3166-1 alpha-2 |
+| `countryCode` | string | yes | ISO 3166-1 alpha-2 (validated) |
 | `storeCard` | boolean | no | default `false`; adds `customerAgreement: {type: "cardOnFile", storedCardUsage: "first"}` |
 | `createToken` | boolean | no | default `false`; adds `tokenCreation: {type: "worldpay"}` |
+| `channel` | enum | no | `moto` (default) · `ecommerce` · `recurring` |
+| `narrative` | string | no | Statement narrative, ≤24 chars (default `MCP Payment`) |
+| `transactionReference` | string | no | Your reference; reuse to make a retry idempotent (default generated `TR-<uuid>`) |
 
-The schema marks `sessionHref` and `tokenHref` both optional; the **server throws** `Either sessionHref or tokenHref must be provided` if neither is present, and uses `sessionHref` if both are.
+Validation: `amount` must be a non-negative integer (minor units); `currency` is ISO-4217 alpha-3; `sessionHref`/`tokenHref`/`cvcSessionHref` must be URLs. Supply **exactly one** of `sessionHref` / `tokenHref`: the server rejects the request if **both** are present (previously `sessionHref` silently won) and if **neither** is.
 
 **Request the server sends** — `POST {WORLDPAY_URL}/api/payments`, `WP-Api-Version: 2024-06-01`, Basic auth. With a session:
 
 ```json
 {
-  "transactionReference": "TR1755820800000",
+  "transactionReference": "TR-3f1b2c4d-…",
   "merchant": { "entity": "<MERCHANT_ENTITY>" },
   "channel": "moto",
   "instruction": {
@@ -151,9 +154,9 @@ With a token, `paymentInstrument` becomes `{ "type": "token", "href": "<tokenHre
 | Input | Type | Required | Notes |
 |---|---|---|---|
 | `commandName` | string | yes | The action you're invoking — `settle`, `cancel`, `refund`, `reverse`, … Informational; not sent to Worldpay |
-| `commandHref` | string | yes | The action URL taken from the `_links` object of a previous payment response |
+| `commandHref` | string | yes | The action URL from the `_links` of a prior payment response. Validated to be same-origin as `WORLDPAY_URL` before credentials are attached |
 
-**Request the server sends** — `POST {commandHref}`, `Content-Type: application/json`, `WP-Api-Version: 2024-06-01`, Basic auth, **no body**. **Success:** 201 or 202; the response is returned verbatim. **Failure message prefix:** `Payment command failed: …`.
+**Request the server sends** — `POST {commandHref}`, `Content-Type: application/json`, `WP-Api-Version: 2024-06-01`, Basic auth, **no body**. The server first checks `commandHref` shares the configured Worldpay origin (a safeguard against sending credentials elsewhere). **Success:** 201 or 202; the response is returned verbatim. **Failure message prefix:** `Payment command failed: …`.
 
 Because no body is sent, use this tool for whole-payment actions (settle, cancel, refund, reverse). Partial actions that need an amount in the body are not expressible through it today.
 
@@ -197,11 +200,9 @@ Because no body is sent, use this tool for whole-payment actions (settle, cancel
 
 | Input | Type | Required | Notes |
 |---|---|---|---|
-| `paymentId` | string | no† | Worldpay payment ID |
+| `paymentId` | string | **yes** | Worldpay payment ID. Required and validated (no URL separators); URL-encoded before use |
 
-† The schema marks it optional; omit it and the request goes to `/paymentQueries/payments/undefined`. Always supply it.
-
-**Request:** `GET {WORLDPAY_URL}/paymentQueries/payments/{paymentId}`. **Success:** 200; the payment object. **Failure prefix:** `Query failed: Payment Query failed …`.
+**Request:** `GET {WORLDPAY_URL}/paymentQueries/payments/{encoded paymentId}`. **Success:** 200; the payment object. **Failure prefix:** `Query failed: Payment Query failed …`.
 
 **Example call**
 
@@ -217,15 +218,15 @@ Because no body is sent, use this tool for whole-payment actions (settle, cancel
 
 | Input | Type | Required | Notes |
 |---|---|---|---|
-| `transactionReference` | string | no | Your `transactionReference` (server-generated ones look like `TR1755820800000`) |
-| `pageSize` | number | no | Accepted by the schema but **not forwarded** in the query string; Worldpay's default page applies |
+| `transactionReference` | string | no | Your `transactionReference` (server-generated ones look like `TR-<uuid>`) |
+| `pageSize` | number | no | default `20`, max `499`; forwarded to Worldpay |
 
-**Request:** `GET {WORLDPAY_URL}/paymentQueries/payments?transactionReference=…`. **Success:** 200; `_embedded.payments` array or whole body. **Failure prefix:** `Query failed: Payment Query failed …`.
+**Request:** `GET {WORLDPAY_URL}/paymentQueries/payments?transactionReference=…&pageSize=…`. **Success:** 200; `_embedded.payments` array or whole body. **Failure prefix:** `Query failed: Payment Query failed …`.
 
 **Example call**
 
 ```json
-{ "name": "query_payments_by_transaction_reference", "arguments": { "transactionReference": "TR1755820800000" } }
+{ "name": "query_payments_by_transaction_reference", "arguments": { "transactionReference": "TR-3f1b2c4d-…" } }
 ```
 
 ---
@@ -273,11 +274,10 @@ ACP-shaped, `snake_case` schema. Required top-level objects: `payment_method`, `
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `type` | enum | yes | `card` |
-| `card_number_type` | enum | yes | `fpan` or `network_token` |
-| `number` | string | yes | *Network token or fallback fpan value* — **a PAN when `fpan`** |
+| `card_number_type` | enum | yes | `network_token` **only** — raw PANs (`fpan`) are rejected |
+| `number` | string | yes | Network token value (never a raw card number) |
 | `exp_month`, `exp_year` | string | no | |
 | `name` | string | no | Cardholder name |
-| `cvc` | string | no | Card verification code — **passes through the agent's context** |
 | `cryptogram`, `eci_value` | string | no | Network-token authentication values |
 | `checks_performed` | array of enum | no | `avs` · `cvv` · `ani` · `auth0` |
 | `iin` | string | no | Issuer identification number |

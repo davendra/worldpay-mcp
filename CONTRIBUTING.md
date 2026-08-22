@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest. This page covers how to build, test and propose changes. The licence in [`LICENSE`](LICENSE) is Worldpay's own — read it before modifying or redistributing the software; contributions to the upstream repository are made under its terms.
+Thanks for your interest. This page covers how to build, test and propose changes. The licence in [`LICENSE`](LICENSE) is Worldpay's own — read it before modifying or redistributing the software; contributions to the upstream repository are made under its terms. This fork adds documentation and a security-hardening pass on top of upstream; see [SECURITY-HARDENING.md](SECURITY-HARDENING.md).
 
 ## Build and run
 
