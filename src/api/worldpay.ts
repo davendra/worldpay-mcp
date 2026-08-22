@@ -50,7 +50,9 @@ export class WorldpayAPI {
 
   /** All outbound calls go through here so every request gets a timeout. */
   private fetchWorldpay(url: string, init: RequestInit): Promise<Response> {
-    return fetch(url, {...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)});
+    // redirect:"error" so a same-origin URL that 302s cannot bounce a credentialed
+    // request to another host (belt-and-braces alongside assertWorldpayUrl).
+    return fetch(url, {...init, redirect: "error", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)});
   }
 
   /**
@@ -87,7 +89,7 @@ export class WorldpayAPI {
     try {
       body = await response.clone().json();
     } catch {
-      body = await response.text().catch(() => "");
+      body = (await response.text().catch(() => "")).slice(0, 500);
     }
     const correlationId =
       response.headers.get("wp-correlationid") ?? response.headers.get("wp-CorrelationId") ?? undefined;

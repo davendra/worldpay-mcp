@@ -12,8 +12,12 @@ interface Session {
   lastActivity: number;
 }
 
-const MAX_SESSIONS = Number.parseInt(process.env.MCP_MAX_SESSIONS ?? "", 10) || 100;
-const SESSION_TTL_MS = Number.parseInt(process.env.MCP_SESSION_TTL_MS ?? "", 10) || 30 * 60 * 1000;
+const clampPositive = (raw: string | undefined, fallback: number): number => {
+  const n = Number.parseInt(raw ?? "", 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+const MAX_SESSIONS = clampPositive(process.env.MCP_MAX_SESSIONS, 100);
+const SESSION_TTL_MS = clampPositive(process.env.MCP_SESSION_TTL_MS, 30 * 60 * 1000);
 
 /**
  * Streamable HTTP transport, hardened per the MCP security best practices:
@@ -86,7 +90,7 @@ export class HTTPTransport implements ConnectableServerTransport {
       allowedHeaders: ['Content-Type', 'Authorization', 'mcp-session-id', 'last-event-id', 'mcp-protocol-version'],
     }));
     this.app.disable("x-powered-by");
-    this.app.use(express.json());
+    this.app.use(express.json({limit: "256kb"}));
     this.app.use(this.securityHeadersMiddleware());
   }
 

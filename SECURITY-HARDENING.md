@@ -95,10 +95,10 @@ Full-OAuth 2.1 resource-server authorization was considered and deliberately not
 
 ## 5. Verification
 
-All checks run on 2026-08-22:
+All checks run on 2026-08-22. The change set also went through an **independent adversarial security review** of the diff (a separate reviewer that tried to break the new guards); its verdict was *ship after fixes*, with no critical or high issues in the new code. The one medium (an over-strict `paymentId` character rule that risked rejecting legitimate ids) and the low-severity items it raised — credentialed-request redirect handling, error-body truncation, a bounded JSON body limit, session-limit clamping, and redacting the session/token href references — were applied and are included here.
 
 - `npm run build` — clean (TypeScript strict).
-- `npm test` — 5/5 suites pass on the updated SDK.
+- `npm test` — **17/17 tests pass** (the original 5, plus 12 new tests covering the SSRF/credential guard, log redaction, and schema rejection of bad amounts, non-ISO currencies, raw PANs, and path-traversal ids).
 - MCP Inspector `tools/list` — exactly 9 tools, each carrying the new annotations; server version reports `1.1.0` (from `package.json`).
 - HTTP transport, live: refuses to start without `MCP_AUTH_TOKEN`; `/healthz` open; `/mcp` returns 401 without/with a wrong bearer and 200 with the correct one; a spoofed `Host` header is rejected with 403 (DNS-rebinding protection).
 - Missing required environment variables → fails fast with a clear message and exit code 1.

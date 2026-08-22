@@ -66,7 +66,10 @@ export const paymentIdQuerySchema = z.object({
   paymentId: z
     .string()
     .min(1)
-    .regex(/^[A-Za-z0-9._~-]+$/, "Alphanumeric payment id")
+    // Block path/query/fragment separators and whitespace (defence in depth;
+    // the value is also encodeURIComponent'd before use). Deliberately permissive
+    // on the character set so opaque Worldpay ids are not falsely rejected.
+    .regex(/^[^\s/?#]+$/, "Payment id must not contain spaces or URL separators")
     .describe("Payment ID to retrieve")
 });
 

@@ -23,7 +23,9 @@ USER node
 # Default transport is stdio (the client speaks to the container over stdin/stdout):
 #   docker run -i --rm --env-file .env worldpay/mcp
 # For the HTTP transport instead, override the command and publish the port:
-#   docker run --rm -p 3001:3001 --env-file .env worldpay/mcp node dist/server-http.js
+#   docker run --rm -p 3001:3001 -e HOST=0.0.0.0 --env-file .env worldpay/mcp node dist/server-http.js
+#   (HOST=0.0.0.0 is needed so the container binds a mappable interface; keep it
+#    behind an authenticating reverse proxy — never expose /mcp directly.)
 # (HTTP requires MCP_AUTH_TOKEN; see .env.example. HEALTHCHECK is intentionally
 #  omitted because the default stdio server opens no port to probe.)
 EXPOSE 3001

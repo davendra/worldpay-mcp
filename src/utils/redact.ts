@@ -7,6 +7,8 @@ const SENSITIVE_KEYS = new Set(
   [
     "cvc",
     "cvcSessionHref",
+    "sessionHref",
+    "tokenHref",
     "number",
     "cardNumber",
     "pan",
