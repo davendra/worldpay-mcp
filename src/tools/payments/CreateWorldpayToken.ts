@@ -14,6 +14,7 @@ export class CreateWorldpayToken extends MCPTool {
       "Create Worldpay Token without Payment",
       "Create a worldpay token using a session. The amount must be 0, storeCard must be true, and to avoid the PCI implications of storing card numbers set createToken to true.",
       paymentSchema.shape,
+      {title: "Create Worldpay Token", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true},
     );
   }
 

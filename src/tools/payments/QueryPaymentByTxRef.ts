@@ -14,6 +14,7 @@ export class QueryPaymentByTxRef extends MCPTool {
       "Query Payments made with Worldpay by transaction reference",
       "Query all payments using a given transaction reference",
       paymentTxnRefQuerySchema.shape,
+      {title: "Query Payments by Transaction Reference", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true},
     );
   }
 

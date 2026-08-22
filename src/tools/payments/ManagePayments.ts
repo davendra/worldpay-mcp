@@ -14,6 +14,7 @@ export class ManagePayments extends MCPTool {
       "Manage Payment",
       "Perform actions on a payment after authorization such as refund, cancel and settle",
       manageSchema.shape,
+      {title: "Manage Payment", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true},
     );
   }
 

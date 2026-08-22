@@ -1,32 +1,73 @@
 import express, {Application, NextFunction, Request, Response, Router} from "express";
-import {randomUUID} from "node:crypto";
+import {randomUUID, timingSafeEqual} from "node:crypto";
 import {StreamableHTTPServerTransport} from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import {logger} from "@/utils/logger";
 import {ConnectableServerTransport} from "@/transports/ServerTransport";
 import {WorldpayMCPServer} from "@/worldpay-mcp-server";
 import cors from 'cors';
 
+interface Session {
+  transport: StreamableHTTPServerTransport;
+  server: WorldpayMCPServer;
+  lastActivity: number;
+}
+
+const MAX_SESSIONS = Number.parseInt(process.env.MCP_MAX_SESSIONS ?? "", 10) || 100;
+const SESSION_TTL_MS = Number.parseInt(process.env.MCP_SESSION_TTL_MS ?? "", 10) || 30 * 60 * 1000;
+
+/**
+ * Streamable HTTP transport, hardened per the MCP security best practices:
+ * - bearer-token authentication on /mcp (required; fail-closed if unset)
+ * - DNS-rebinding protection (Host/Origin validation) via the SDK transport
+ * - binds to 127.0.0.1 by default
+ * - a fresh MCP server per session (no shared-instance cross-session bleed)
+ * - session count cap + idle TTL eviction
+ */
 export class HTTPTransport implements ConnectableServerTransport {
   private app: Application;
-  private transports: Map<string, StreamableHTTPServerTransport>;
+  private sessions: Map<string, Session>;
   private readonly port: number;
-  private readonly server: WorldpayMCPServer;
+  private readonly host: string;
+  private readonly serverFactory: () => WorldpayMCPServer;
+  private sweepTimer?: NodeJS.Timeout;
 
-  constructor(port: number = 3001, server: WorldpayMCPServer) {
+  constructor(port: number, serverFactory: () => WorldpayMCPServer, host = process.env.HOST || "127.0.0.1") {
     this.app = express();
-    this.transports = new Map<string, StreamableHTTPServerTransport>();
+    this.sessions = new Map<string, Session>();
     this.port = port;
-    this.server = server;
+    this.host = host;
+    this.serverFactory = serverFactory;
+  }
+
+  private get authToken(): string | undefined {
+    return process.env.MCP_AUTH_TOKEN;
+  }
+
+  private get allowedHosts(): string[] {
+    const base = [`${this.host}:${this.port}`, `localhost:${this.port}`, `127.0.0.1:${this.port}`];
+    const extra = (process.env.MCP_ALLOWED_HOSTS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    return [...new Set([...base, ...extra])];
+  }
+
+  private get allowedOrigins(): string[] {
+    return (process.env.CORS_ORIGIN ?? "").split(",").map((s) => s.trim()).filter(Boolean);
   }
 
   public async connect(): Promise<void> {
+    if (!this.authToken) {
+      throw new Error(
+        "MCP_AUTH_TOKEN is required to run the HTTP transport (it authenticates inbound /mcp requests). " +
+          "Set a strong random token, or use the stdio transport for local single-client use.",
+      );
+    }
+
     this.configureApp();
     this.registerRoutes();
     this.registerErrorHandler();
+    this.startSessionSweeper();
 
-
-    const server = this.app.listen(this.port, () => {
-      logger.info(`Worldpay MCP HTTP server listening on port ${this.port}`);
+    const server = this.app.listen(this.port, this.host, () => {
+      logger.info(`Worldpay MCP HTTP server listening on ${this.host}:${this.port}`);
     });
 
     server.on('error', (err) => {
@@ -35,11 +76,14 @@ export class HTTPTransport implements ConnectableServerTransport {
   }
 
   private configureApp(): void {
+    // CORS: never `*` with credentials. Cross-origin is allowed only when an
+    // explicit CORS_ORIGIN allowlist is configured; otherwise same-origin only.
+    const origins = this.allowedOrigins;
     this.app.use(cors({
-      origin: process.env.CORS_ORIGIN || "*",
+      origin: origins.length > 0 ? origins : false,
       exposedHeaders: ["Mcp-Session-Id"],
-      credentials: true,
-      allowedHeaders: ['Content-Type', 'Authorization','mcp-session-id', 'last-event-id', 'mcp-protocol-version'],
+      credentials: origins.length > 0,
+      allowedHeaders: ['Content-Type', 'Authorization', 'mcp-session-id', 'last-event-id', 'mcp-protocol-version'],
     }));
     this.app.disable("x-powered-by");
     this.app.use(express.json());
@@ -47,7 +91,7 @@ export class HTTPTransport implements ConnectableServerTransport {
   }
 
   private securityHeadersMiddleware() {
-    return (req: Request, res: Response, next: NextFunction) => {
+    return (_req: Request, res: Response, next: NextFunction) => {
       res.setHeader(
         "Content-Security-Policy",
         [
@@ -73,13 +117,31 @@ export class HTTPTransport implements ConnectableServerTransport {
     };
   }
 
+  // Bearer-token auth. Independent of the session id (sessions MUST NOT be used
+  // for authentication per the MCP security spec). Constant-time comparison.
+  private authMiddleware = (req: Request, res: Response, next: NextFunction): void => {
+    const expected = this.authToken!;
+    const header = req.headers.authorization ?? "";
+    const match = /^Bearer\s+(.+)$/.exec(header);
+    const unauthorized = (desc?: string) => {
+      res.setHeader("WWW-Authenticate", `Bearer${desc ? ` error="${desc}"` : ""}`);
+      res.status(401).json({jsonrpc: "2.0", error: {code: -32001, message: "Unauthorized"}, id: null});
+    };
+    if (!match) return unauthorized();
+    const provided = Buffer.from(match[1]);
+    const expectedBuf = Buffer.from(expected);
+    if (provided.length !== expectedBuf.length || !timingSafeEqual(provided, expectedBuf)) {
+      return unauthorized("invalid_token");
+    }
+    next();
+  };
 
   private registerRoutes(): void {
     const router = Router();
-    router.post("/mcp", this.handlePost.bind(this));
-    router.get("/mcp", this.handleSessionRequest.bind(this));
-    router.delete("/mcp", this.handleSessionRequest.bind(this));
-    // Health and readiness endpoints
+    router.post("/mcp", this.authMiddleware, this.handlePost.bind(this));
+    router.get("/mcp", this.authMiddleware, this.handleSessionRequest.bind(this));
+    router.delete("/mcp", this.authMiddleware, this.handleSessionRequest.bind(this));
+    // Health/readiness — intentionally unauthenticated so orchestrators can probe.
     router.get("/healthz", (_req, res) => res.status(200).json({ status: "up" }));
     router.get("/readyz", (_req, res) => res.status(200).json({ status: "ready" }));
 
@@ -88,68 +150,86 @@ export class HTTPTransport implements ConnectableServerTransport {
 
   private async handlePost(req: Request, res: Response): Promise<void> {
     try {
-      // Check for existing session ID
       const sessionId = req.headers["mcp-session-id"] as string | undefined;
       let transport: StreamableHTTPServerTransport;
 
-      if (sessionId && this.transports.get(sessionId)) {
-        // Reuse existing transport
-        transport = this.transports.get(sessionId)!;
+      const existing = sessionId ? this.sessions.get(sessionId) : undefined;
+      if (existing) {
+        existing.lastActivity = Date.now();
+        transport = existing.transport;
       } else {
-        // New initialization request
+        if (this.sessions.size >= MAX_SESSIONS) {
+          res.status(503).json({jsonrpc: "2.0", error: {code: -32000, message: "Server session limit reached"}, id: null});
+          return;
+        }
+
+        // A fresh MCP server per session — never share one instance across
+        // transports (that caused 2nd-session 500s and risked cross-session leaks).
+        const mcpServer = this.serverFactory();
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (sessionId) => {
-            // Store the transport by session ID
-            this.transports.set(sessionId, transport)
+          enableDnsRebindingProtection: true,
+          allowedHosts: this.allowedHosts,
+          allowedOrigins: this.allowedOrigins.length > 0 ? this.allowedOrigins : undefined,
+          onsessioninitialized: (sid) => {
+            this.sessions.set(sid, {transport, server: mcpServer, lastActivity: Date.now()});
           },
         });
 
-        // Clean up transport when closed
         transport.onclose = () => {
           if (transport.sessionId) {
-            this.transports.delete(transport.sessionId)
+            this.sessions.delete(transport.sessionId);
           }
         };
 
-        // Connect to the MCP server
-        await this.server.connect(transport);
+        await mcpServer.connect(transport);
       }
 
-      // Handle the request
       await transport.handleRequest(req, res, req.body);
     } catch (err) {
       logger.error("POST /mcp error", err);
-      res.status(500).json({
-        jsonrpc: "2.0",
-        error: {code: -32603, message: "Internal Server Error"},
-        id: null,
-      });
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: {code: -32603, message: "Internal Server Error"},
+          id: null,
+        });
+      }
     }
   }
 
-  // Reusable handler for GET and DELETE requests
-  handleSessionRequest = async (
-    req: express.Request,
-    res: express.Response
-  ) => {
+  handleSessionRequest = async (req: express.Request, res: express.Response) => {
     const sessionId = req.headers["mcp-session-id"] as string | undefined;
-    if (!sessionId || !this.transports.get(sessionId)) {
+    const session = sessionId ? this.sessions.get(sessionId) : undefined;
+    if (!session) {
       res.status(400).send("Invalid or missing session ID");
       return;
     }
-
-    const transport = this.transports.get(sessionId)!;
-    await transport.handleRequest(req, res);
+    session.lastActivity = Date.now();
+    await session.transport.handleRequest(req, res);
   };
 
+  private startSessionSweeper(): void {
+    this.sweepTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [id, s] of this.sessions) {
+        if (now - s.lastActivity > SESSION_TTL_MS) {
+          logger.info(`Evicting idle session ${id}`);
+          void s.transport.close().catch(() => undefined);
+          this.sessions.delete(id);
+        }
+      }
+    }, 60_000);
+    // Don't keep the process alive solely for the sweeper.
+    this.sweepTimer.unref?.();
+  }
 
   private registerErrorHandler(): void {
-    // Final error handler
-    this.app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    this.app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
       logger.error("Unhandled error", err);
-      res.status(500).send("Unhandled Server Error");
+      if (!res.headersSent) {
+        res.status(500).send("Unhandled Server Error");
+      }
     });
   }
 }
-

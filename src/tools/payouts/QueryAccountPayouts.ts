@@ -14,6 +14,7 @@ export class QueryAccountPayouts extends MCPTool {
       "Query Account Payouts",
       "Query for payouts made through Worldpay",
       accountPayoutQuerySchema.shape,
+      {title: "Query Account Payouts", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true},
     );
   }
 
@@ -21,13 +22,22 @@ export class QueryAccountPayouts extends MCPTool {
     try {
       const response = await this.api.queryAccountPayouts(args);
 
-      if (response.items.length > 0) {
-        logger.info(`Query successful: ${response.items.length} payout(s) found.`);
-        return new ToolCallResponse(MCPResponse.text(response))
-      } else {
+      // Defensive: the shared query helper may return an array (when the body
+      // has _embedded), the raw object, or an object with an `items` array.
+      // Reading `.items.length` blindly threw a TypeError on the array path.
+      const items = Array.isArray(response)
+        ? response
+        : Array.isArray(response?.items)
+          ? response.items
+          : undefined;
+
+      if (items && items.length === 0) {
         logger.info("Query returned no payouts");
         return new ToolCallResponse(MCPResponse.text("No payouts found for the given criteria."))
       }
+
+      logger.info(`Query successful${items ? `: ${items.length} payout(s) found.` : "."}`);
+      return new ToolCallResponse(MCPResponse.text(response))
     } catch (error) {
       logger.error(`Payment error: ${(error as Error).message}`);
       return new ToolCallResponseError(MCPResponse.text(`Payment failed: ${(error as Error).message}`));

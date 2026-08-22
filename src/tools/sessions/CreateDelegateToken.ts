@@ -14,6 +14,7 @@ export class CreateDelegateToken extends MCPTool {
       "Create Delegate Token",
       "Create a ACP delegate payment token for use in ACP checkout sessions",
       delegateTokenSchema.shape,
+      {title: "Create Delegate Token", readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true},
     );
   }
 

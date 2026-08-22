@@ -26,19 +26,30 @@ export interface Tool {
   execute(args: any): Promise<CallToolResult>;
 }
 
+export type ToolAnnotations = NonNullable<ToolDefinition["annotations"]>;
+
 export abstract class MCPTool implements Tool {
   protected name: string;
   readonly title: string;
   readonly description: string;
   readonly inputSchema: ZodRawShape;
+  readonly annotations?: ToolAnnotations;
   protected api: WorldpayAPI;
 
-  protected constructor(api: WorldpayAPI, name: string, title: string, description: string, inputSchema: ZodRawShape) {
+  protected constructor(
+    api: WorldpayAPI,
+    name: string,
+    title: string,
+    description: string,
+    inputSchema: ZodRawShape,
+    annotations?: ToolAnnotations,
+  ) {
     this.api = api;
     this.name = name;
     this.title = title;
     this.description = description;
     this.inputSchema = inputSchema;
+    this.annotations = annotations;
   }
 
   getName(): string {
@@ -50,6 +61,9 @@ export abstract class MCPTool implements Tool {
       title: this.title,
       description: this.description,
       inputSchema: this.inputSchema,
+      // MCP tool behaviour hints (spec 2025-03-26+). Lets clients distinguish
+      // read-only queries from money-moving tools in their approval UI.
+      annotations: this.annotations,
     };
   }
 

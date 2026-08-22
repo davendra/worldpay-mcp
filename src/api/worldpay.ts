@@ -1,13 +1,15 @@
+import {randomUUID} from "node:crypto";
 import {logger} from "@/utils/logger";
+import {redactedJson} from "@/utils/redact";
 import {
   accountPayoutQuerySchema,
   delegateTokenSchema,
+  hppSchema,
   manageSchema,
   paymentDateQuerySchema,
   paymentSchema,
   paymentTxnRefQuerySchema
 } from "@/schemas/schemas";
-import {RegisteredTool} from '@modelcontextprotocol/sdk/server/mcp.js';
 
 import {z} from "zod";
 import {
@@ -25,6 +27,11 @@ import {WorldpayMCPConfig} from "@/worldpay-mcp-server";
 const QUERY_API_PATH = "/paymentQueries/payments";
 const PAYMENTS_API_PATH = '/api/payments';
 const DELEGATE_TOKEN_PATH = "/sessions/agentic_commerce/delegate_payment";
+const HOSTED_PAYMENTS_PATH = "/payment_pages";
+// Outbound request timeout (ms). Configurable via WORLDPAY_TIMEOUT_MS.
+const REQUEST_TIMEOUT_MS = Number.parseInt(process.env.WORLDPAY_TIMEOUT_MS ?? "", 10) || 30_000;
+const PAYMENTS_API_VERSION = "2024-06-01";
+const ACP_API_VERSION = "2025-09-29";
 
 export class WorldpayAPI {
   private config: WorldpayMCPConfig;
@@ -41,6 +48,57 @@ export class WorldpayAPI {
     return `Basic ${token}`;
   }
 
+  /** All outbound calls go through here so every request gets a timeout. */
+  private fetchWorldpay(url: string, init: RequestInit): Promise<Response> {
+    return fetch(url, {...init, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)});
+  }
+
+  /**
+   * Guard against credential exfiltration / SSRF: refuse to send the merchant's
+   * Basic-auth header to any host other than the configured Worldpay base URL.
+   * `manage_payment` takes a caller-supplied `commandHref`; without this a
+   * prompt-injected or hallucinated href would leak credentials to an attacker.
+   */
+  private assertWorldpayUrl(candidate: string): void {
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      throw new Error("Provided URL is not a valid absolute URL");
+    }
+    const base = new URL(this.config.baseUrl);
+    if (parsed.origin !== base.origin) {
+      throw new Error(
+        `Refusing to send credentials to a non-Worldpay host (${parsed.origin}); expected ${base.origin}`,
+      );
+    }
+    if (parsed.protocol !== "https:" && parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") {
+      throw new Error("Worldpay requests must use https");
+    }
+  }
+
+  /**
+   * Log the full upstream failure server-side (redacted) and throw a generic,
+   * status-only error. The raw Worldpay error body is NOT propagated to the
+   * model/client, which would otherwise be an info-disclosure channel.
+   */
+  private async failure(kind: string, response: Response): Promise<never> {
+    let body: unknown;
+    try {
+      body = await response.clone().json();
+    } catch {
+      body = await response.text().catch(() => "");
+    }
+    const correlationId =
+      response.headers.get("wp-correlationid") ?? response.headers.get("wp-CorrelationId") ?? undefined;
+    logger.error(`${kind} failed`, {status: response.status, correlationId, body});
+    throw new Error(
+      `${kind} failed with status ${response.status}` +
+        (correlationId ? ` (correlationId ${correlationId})` : "") +
+        `. See server logs for detail.`,
+    );
+  }
+
   async callQueryAPIWithParams(queryParams: URLSearchParams): Promise<any> {
     return this.callQueryAPI(
       `${this.config.baseUrl}${QUERY_API_PATH}?${queryParams}`
@@ -51,7 +109,7 @@ export class WorldpayAPI {
     logger.info(`Calling GET ${path}`);
 
     const basicAuth = this.getBasicAuth()
-    const response = await fetch(path, {
+    const response = await this.fetchWorldpay(path, {
       method: "GET",
       headers: {
         Accept: "application/vnd.worldpay.payment-queries-v1.hal+json",
@@ -60,19 +118,14 @@ export class WorldpayAPI {
     });
 
     if (response.status != 200) {
-      throw new Error(
-        `Payment Query failed with status ${response.status}: ${JSON.stringify(
-          await response.json()
-        )}`
-      );
+      return this.failure("Payment query", response);
     }
 
     const result: any = await response.json();
-    if (result._embedded) {
-      logger.info(
-        `Query successful: ${result._embedded.payments.length} payments found.`
-      );
-      return result._embedded?.payments || [];
+    if (result && result._embedded) {
+      const payments = result._embedded.payments ?? [];
+      logger.info(`Query successful: ${payments.length} payment(s) found.`);
+      return payments;
     } else {
       logger.info("Query successful, payment found.");
       return result
@@ -80,15 +133,16 @@ export class WorldpayAPI {
   }
 
   // Add SDK methods here
-  async queryPaymentsByIdHandler(paymentId: any) {
+  async queryPaymentsByIdHandler(paymentId: string) {
+    // Encode to prevent path/query injection via the caller-supplied id.
     return this.callQueryAPI(
-      `${this.config.baseUrl}${QUERY_API_PATH}/${paymentId}`
+      `${this.config.baseUrl}${QUERY_API_PATH}/${encodeURIComponent(paymentId)}`
     );
   }
 
   async queryPaymentsByDate(
     params: z.infer<typeof paymentDateQuerySchema>
-  ): Promise<RegisteredTool> {
+  ): Promise<any> {
     let queryParams = new URLSearchParams({
       startDate: params.startDate ? params.startDate : "",
       endDate: params.endDate ? params.endDate : "",
@@ -105,56 +159,51 @@ export class WorldpayAPI {
         ? params.transactionReference
         : ""
     });
+    // Forward pageSize (previously accepted by the schema but silently dropped).
+    if (params.pageSize) {
+      queryParams.set("pageSize", params.pageSize.toString());
+    }
     return this.callQueryAPIWithParams(queryParams);
   }
 
   async managePayment(params: z.infer<typeof manageSchema>) {
-    logger.info(
-      `Calling POST ${params.commandHref} API`
-    );
+    this.assertWorldpayUrl(params.commandHref);
+    logger.info(`Calling POST ${params.commandHref} (${params.commandName})`);
     const basicAuth = this.getBasicAuth()
-    const response = await fetch(params.commandHref, {
+    const response = await this.fetchWorldpay(params.commandHref, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: basicAuth,
-        "WP-Api-Version": "2024-06-01",
+        "WP-Api-Version": PAYMENTS_API_VERSION,
       },
     });
 
-    const result = await response.json();
-
     if (response.status != 201 && response.status != 202) {
-      throw new Error(
-        `Payment failed with status ${response.status}: ${JSON.stringify(
-          result
-        )}`
-      );
+      return this.failure("Payment command", response);
     }
 
     logger.info('Payment command successful');
-    return result
+    return response.json();
   }
 
   async takeGuestPayment(params: z.infer<typeof paymentSchema>) {
     let paymentRequest: PaymentRequest = this.createRequest(params);
 
     logger.info(
-      `Calling POST ${this.config.baseUrl}${
-        PAYMENTS_API_PATH
-      } API with params: ${JSON.stringify(params)}`
+      `Calling POST ${this.config.baseUrl}${PAYMENTS_API_PATH} (ref ${paymentRequest.transactionReference}) params: ${redactedJson(params)}`
     );
 
     const basicAuth = this.getBasicAuth()
 
-    const response = await fetch(
+    const response = await this.fetchWorldpay(
       `${this.config.baseUrl}${PAYMENTS_API_PATH}`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: basicAuth,
-          "WP-Api-Version": "2024-06-01",
+          "WP-Api-Version": PAYMENTS_API_VERSION,
         },
         body: JSON.stringify(paymentRequest),
       }
@@ -163,11 +212,7 @@ export class WorldpayAPI {
     logger.info(`Response CorrelationId: ${response.headers.get("wp-correlationid")}`);
 
     if (response.status != 201 && response.status != 202) {
-      throw new Error(
-        `Payment failed with status ${response.status}: ${JSON.stringify(
-          await response.json()
-        )}`
-      );
+      return this.failure("Payment", response);
     }
 
     const result = (await response.json()) as PaymentsResponse201;
@@ -184,6 +229,12 @@ export class WorldpayAPI {
       postalCode: params.postalCode,
       countryCode: params.countryCode,
     } as BillingAddress;
+
+    // Exactly one instrument. Supplying both used to silently prefer sessionHref
+    // and could charge the wrong instrument.
+    if (params.sessionHref && params.tokenHref) {
+      throw new Error("Provide either sessionHref or tokenHref, not both");
+    }
 
     let paymentInstrument: TokenPaymentInstrument | SessionPaymentInstrument;
     if (params.sessionHref) {
@@ -207,7 +258,7 @@ export class WorldpayAPI {
     let instruction: CardPaymentsInstruction = {
       method: "card",
       paymentInstrument: paymentInstrument,
-      narrative: {line1: "MCP Payment"},
+      narrative: {line1: params.narrative ?? "MCP Payment"},
       value: {
         currency: params.currency,
         amount: params.amount,
@@ -215,9 +266,11 @@ export class WorldpayAPI {
     } as CardPaymentsInstruction;
 
     let paymentRequest: PaymentRequest = {
-      transactionReference: `TR${Date.now()}`,
+      // Caller-supplied reference makes retries idempotent; UUID default avoids
+      // the millisecond-collision the old `TR${Date.now()}` scheme had.
+      transactionReference: params.transactionReference ?? `TR-${randomUUID()}`,
       merchant: {entity: `${this.config.merchantEntity}`},
-      channel: "moto",
+      channel: params.channel ?? "moto",
       instruction: instruction,
     } as PaymentRequest;
 
@@ -238,9 +291,40 @@ export class WorldpayAPI {
     return paymentRequest;
   }
 
+  async createHostedPayment(params: z.infer<typeof hppSchema>) {
+    const transaction = {
+      transactionReference: `TR-${randomUUID()}`,
+      merchant: {entity: this.config.merchantEntity},
+      expiry: 3600,
+      narrative: {line1: params.narrative ?? "MCP Payment"},
+      value: {amount: params.amount, currency: params.currency},
+    };
+
+    logger.info(
+      `Calling POST ${this.config.baseUrl}${HOSTED_PAYMENTS_PATH} (ref ${transaction.transactionReference})`
+    );
+
+    const response = await this.fetchWorldpay(`${this.config.baseUrl}${HOSTED_PAYMENTS_PATH}`, {
+      method: "POST",
+      headers: {
+        Authorization: this.getBasicAuth(),
+        "Content-Type": "application/vnd.worldpay.payment_pages-v1.hal+json",
+        Accept: "application/vnd.worldpay.payment_pages-v1.hal+json",
+      },
+      body: JSON.stringify(transaction),
+    });
+
+    if (response.status != 200) {
+      return this.failure("Hosted payment", response);
+    }
+
+    logger.info("Hosted payment transaction created successfully");
+    return response.json();
+  }
+
   async queryAccountPayouts(params: z.infer<typeof accountPayoutQuerySchema>) {
     const entries: [string, string][] = Object.entries(params)
-      .filter(([key, value]) => value !== undefined && value !== null && value !== "")
+      .filter(([, value]) => value !== undefined && value !== null && value !== "")
       .map(([key, value]) => [key, String(value)]);
 
     if (this.config.merchantEntity) {
@@ -252,39 +336,30 @@ export class WorldpayAPI {
   }
 
   async createDelegateToken(args: z.infer<typeof delegateTokenSchema>) {
-   
     logger.info(
-      `Calling POST ${this.config.baseUrl}${
-        DELEGATE_TOKEN_PATH}`
+      `Calling POST ${this.config.baseUrl}${DELEGATE_TOKEN_PATH} params: ${redactedJson(args)}`
     );
     const basicAuth = this.getBasicAuth()
 
-    const response = await fetch(
+    const response = await this.fetchWorldpay(
       `${this.config.baseUrl}${DELEGATE_TOKEN_PATH}`,
       {
         method: "POST",
         headers: {
           Authorization: basicAuth,
           "Content-Type": "application/json",
-          "API-Version": "2025-09-29",
+          "API-Version": ACP_API_VERSION,
           Accept: "application/json",
         },
         body: JSON.stringify(args),
       }
     );
 
-    const result = await response.json();
-
     if (response.status != 201) {
-      throw new Error(
-        `Creating a Delegate Token failed with status ${response.status}: ${JSON.stringify(
-          result
-        )}`
-      );
+      return this.failure("Delegate token creation", response);
     }
 
     logger.info(`Created a Delegate Token successfully`);
-
-    return result;
+    return response.json();
   }
 }

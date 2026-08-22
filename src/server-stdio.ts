@@ -3,19 +3,15 @@
 import {WorldpayMCPServer} from "@/worldpay-mcp-server";
 import {StdioTransport} from "@/transports/StdioTransport";
 import {logger} from "@/utils/logger";
+import {loadWorldpayConfig} from "@/config";
 
 try {
-  const server = new WorldpayMCPServer({
-    name: "Worldpay",
-    version: "1.0.3",
-    baseUrl: process.env.WORLDPAY_URL!,
-    username: process.env.WORLDPAY_USERNAME!,
-    password: process.env.WORLDPAY_PASSWORD!,
-    merchantEntity: process.env.MERCHANT_ENTITY!
-  });
+  const server = new WorldpayMCPServer(loadWorldpayConfig());
   const transport = new StdioTransport(server);
   await transport.connect();
 } catch (error) {
   logger.error('Failed to start Worldpay MCP STDIO server:', error);
+  // Also surface fatal boot errors to stderr (the logger only writes to a file).
+  console.error(`Failed to start Worldpay MCP STDIO server: ${(error as Error).message}`);
   process.exit(1);
 }

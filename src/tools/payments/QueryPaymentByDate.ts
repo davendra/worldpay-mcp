@@ -14,6 +14,7 @@ export class QueryPaymentByDate extends MCPTool {
       "Query Payments made with Worldpay by date range",
       "Query all payments within a given date and time range",
       paymentDateQuerySchema.shape,
+      {title: "Query Payments by Date", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true},
     );
   }
 

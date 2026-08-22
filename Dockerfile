@@ -1,28 +1,31 @@
-FROM node:20-alpine
-
+# --- build stage ---
+FROM node:20-alpine AS build
 WORKDIR /app
-
-# Copy package files
 COPY package*.json ./
-
-# Install all dependencies (including dev dependencies for building)
-RUN npm install
-
-# Copy source code
+# Reproducible install from the lockfile (dev deps needed to build).
+RUN npm ci
 COPY . .
-
-# Build the TypeScript project
 RUN npm run build
 
-# Remove source code, tests, and dev dependencies
-RUN rm -rf src/ tests/ tsconfig.json jest.config.ts && \
-    npm prune --production
+# --- runtime stage ---
+FROM node:20-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+# Production dependencies only, from the lockfile.
+COPY package*.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+# Built output and package manifest (the server reads its version from package.json).
+COPY --from=build /app/dist ./dist
 
+# Run as the built-in unprivileged user rather than root.
+USER node
+
+# Default transport is stdio (the client speaks to the container over stdin/stdout):
+#   docker run -i --rm --env-file .env worldpay/mcp
+# For the HTTP transport instead, override the command and publish the port:
+#   docker run --rm -p 3001:3001 --env-file .env worldpay/mcp node dist/server-http.js
+# (HTTP requires MCP_AUTH_TOKEN; see .env.example. HEALTHCHECK is intentionally
+#  omitted because the default stdio server opens no port to probe.)
 EXPOSE 3001
-
-# Set environment variables (override in docker run or compose as needed)
-# ENV WORLDPAY_USERNAME=
-# ENV WORLDPAY_PASSWORD=
-# ENV WORLDPAY_URL=https://try.access.worldpay.com
 
 CMD ["node", "dist/server-stdio.js"]

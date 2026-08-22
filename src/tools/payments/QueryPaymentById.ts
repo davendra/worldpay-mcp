@@ -14,6 +14,7 @@ export class QueryPaymentById extends MCPTool {
       "Retrieve specific payment by payment Id",
       "Retrieve specific payment by payment Id",
       paymentIdQuerySchema.shape,
+      {title: "Query Payment by Id", readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true},
     );
   }
 

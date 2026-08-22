@@ -14,6 +14,7 @@ export class TakeGuestPayment extends MCPTool {
       "Take Guest Payment",
       "Take a guest payment using session or worldpay token",
       paymentSchema.shape,
+      {title: "Take Guest Payment", readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true},
     );
   }
 
