@@ -44,7 +44,7 @@ export function loadWorldpayConfig(): WorldpayConfig {
 
   const baseUrl = process.env.WORLDPAY_URL!.replace(/\/+$/, "");
   try {
-    // eslint-disable-next-line no-new
+     
     new URL(baseUrl);
   } catch {
     throw new Error(`WORLDPAY_URL is not a valid URL: "${baseUrl}"`);

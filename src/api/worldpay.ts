@@ -145,7 +145,7 @@ export class WorldpayAPI {
   async queryPaymentsByDate(
     params: z.infer<typeof paymentDateQuerySchema>
   ): Promise<any> {
-    let queryParams = new URLSearchParams({
+    const queryParams = new URLSearchParams({
       startDate: params.startDate ? params.startDate : "",
       endDate: params.endDate ? params.endDate : "",
       pageSize: params.pageSize ? params.pageSize.toString() : "",
@@ -156,7 +156,7 @@ export class WorldpayAPI {
   async queryPaymentsByTxRefHandler(
     params: z.infer<typeof paymentTxnRefQuerySchema>
   ) {
-    let queryParams = new URLSearchParams({
+    const queryParams = new URLSearchParams({
       transactionReference: params.transactionReference
         ? params.transactionReference
         : ""
@@ -190,7 +190,7 @@ export class WorldpayAPI {
   }
 
   async takeGuestPayment(params: z.infer<typeof paymentSchema>) {
-    let paymentRequest: PaymentRequest = this.createRequest(params);
+    const paymentRequest: PaymentRequest = this.createRequest(params);
 
     logger.info(
       `Calling POST ${this.config.baseUrl}${PAYMENTS_API_PATH} (ref ${paymentRequest.transactionReference}) params: ${redactedJson(params)}`
@@ -225,7 +225,7 @@ export class WorldpayAPI {
 
 
   createRequest(params: z.infer<typeof paymentSchema>): PaymentRequest {
-    let billingAddress: BillingAddress = {
+    const billingAddress: BillingAddress = {
       address1: params.address1,
       city: params.city,
       postalCode: params.postalCode,
@@ -257,7 +257,7 @@ export class WorldpayAPI {
       throw new Error("Either sessionHref or tokenHref must be provided");
     }
 
-    let instruction: CardPaymentsInstruction = {
+    const instruction: CardPaymentsInstruction = {
       method: "card",
       paymentInstrument: paymentInstrument,
       narrative: {line1: params.narrative ?? "MCP Payment"},
@@ -267,7 +267,7 @@ export class WorldpayAPI {
       },
     } as CardPaymentsInstruction;
 
-    let paymentRequest: PaymentRequest = {
+    const paymentRequest: PaymentRequest = {
       // Caller-supplied reference makes retries idempotent; UUID default avoids
       // the millisecond-collision the old `TR${Date.now()}` scheme had.
       transactionReference: params.transactionReference ?? `TR-${randomUUID()}`,
@@ -277,7 +277,7 @@ export class WorldpayAPI {
     } as PaymentRequest;
 
     if (params.storeCard) {
-      let cit: PaymentsCardOnFileCustomerAgreement = {
+      const cit: PaymentsCardOnFileCustomerAgreement = {
         type: "cardOnFile",
         storedCardUsage: "first",
       };
@@ -285,7 +285,7 @@ export class WorldpayAPI {
     }
 
     if (params.createToken) {
-      let token: TokenCreation = {
+      const token: TokenCreation = {
         type: "worldpay",
       };
       paymentRequest.instruction.tokenCreation = token;

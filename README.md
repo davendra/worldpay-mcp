@@ -432,7 +432,7 @@ Short version — the long version is **[docs/security.md](docs/security.md)**.
 npm test
 ```
 
-Jest (`ts-jest`, `@fetch-mock/jest`) — **17 tests across 8 suites**: the tool suites against mocked Worldpay responses, plus security suites for the SSRF/credential guard, log redaction, and schema rejection (bad amounts, non-ISO currency, raw PANs, path-traversal ids). No network, no credentials. Verified on Node 22; the CI workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs build + test on Node 20 and 22.
+Jest (`ts-jest`, `@fetch-mock/jest`) — **22 tests across 9 suites**: the tool suites against mocked Worldpay responses, plus security suites for the SSRF/credential guard, log redaction, and schema rejection (bad amounts, non-ISO currency, raw PANs, path-traversal ids). No network, no credentials. Verified on Node 22; the CI workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs build + test on Node 20 and 22.
 
 ---
 
@@ -471,7 +471,7 @@ Access Worldpay products the server does **not** expose today, stated so you don
 
 ## A note on accuracy
 
-These docs describe **this fork's** code (package version `1.1.0`; the server reports `Worldpay` `1.1.0`, read from `package.json`). It adds a security-hardening pass over upstream commit `e674e2a` — see **[SECURITY-HARDENING.md](SECURITY-HARDENING.md)** for exactly what changed and why. Every behavioural statement traces to a file in `src/`. MCP **resources** and **prompts** are still not implemented. If you find a discrepancy between these docs and the code, the code is right — please open an issue.
+These docs describe **this fork's** code (package version `1.2.0`; the server reports `Worldpay` `1.2.0`, read from `package.json`). It adds a security-hardening pass over upstream commit `e674e2a` — see **[SECURITY-HARDENING.md](SECURITY-HARDENING.md)** for exactly what changed and why. Every behavioural statement traces to a file in `src/`. MCP **resources** and **prompts** are still not implemented. If you find a discrepancy between these docs and the code, the code is right — please open an issue.
 
 ---
 

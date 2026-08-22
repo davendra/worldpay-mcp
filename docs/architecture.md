@@ -161,7 +161,7 @@ Two consequences of this shape:
 - **The `extra` argument is not used.** Request metadata the SDK offers (progress token, abort signal) is discarded at the dispatch closure, so tools can't be cancelled mid-flight. Inbound authentication is handled at the HTTP transport (bearer token), not per tool.
 - **Annotations are set.** Every tool declares `readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint` via `getDefinition()`, so `tools/list` lets a client tell the read-only `query_*` tools from the money-moving ones — see [security.md](security.md#tool-approval-policy).
 
-Server identity as seen by clients on `initialize`: `{ name: "Worldpay", version: "1.1.0" }` (read from `package.json` via `src/config.ts`). Capabilities: `tools` only.
+Server identity as seen by clients on `initialize`: `{ name: "Worldpay", version: "1.2.0" }` (read from `package.json` via `src/config.ts`). Capabilities: `tools` only.
 
 ---
 
@@ -298,6 +298,6 @@ Stated neutrally — these are the facts you design around.
 | Response fidelity | Raw Worldpay JSON on success; errors sanitized to status + correlation id | Models see successful bodies incl. `_links`; upstream error bodies are logged server-side, not returned |
 | Tool annotations | Set on all 9 tools | Clients can auto-classify read-only vs money-moving tools |
 | Pagination | `pageSize` honoured on date, payout **and** transaction-reference queries | Consistent paging across the query tools |
-| Versioning | Server reports `1.1.0`, read from `package.json` | The advertised version matches the package |
+| Versioning | Server reports `1.2.0`, read from `package.json` | The advertised version matches the package |
 
 These are the natural next engineering items for anyone extending the server; they are listed as observations, not as a roadmap.

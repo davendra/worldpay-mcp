@@ -44,7 +44,7 @@ export class WorldpayMCPServer extends McpServer {
 
     // Automatically register all tools
     tools.forEach(tool => {
-      this.registerTool(tool.getName(), tool.getDefinition(), (args: any, extra: any) => tool.execute(args));
+      this.registerTool(tool.getName(), tool.getDefinition(), (args: any, _extra: any) => tool.execute(args));
     });
   }
 }

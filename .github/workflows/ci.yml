@@ -21,6 +21,7 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - run: npm run lint
       - run: npm run build
       - run: npm test
       - name: Smoke-test stdio server advertises 9 tools

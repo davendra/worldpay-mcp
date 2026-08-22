@@ -34,6 +34,7 @@ export class HTTPTransport implements ConnectableServerTransport {
   private readonly host: string;
   private readonly serverFactory: () => WorldpayMCPServer;
   private sweepTimer?: NodeJS.Timeout;
+  private httpServer?: import("node:http").Server;
 
   constructor(port: number, serverFactory: () => WorldpayMCPServer, host = process.env.HOST || "127.0.0.1") {
     this.app = express();
@@ -70,12 +71,25 @@ export class HTTPTransport implements ConnectableServerTransport {
     this.registerErrorHandler();
     this.startSessionSweeper();
 
-    const server = this.app.listen(this.port, this.host, () => {
+    this.httpServer = this.app.listen(this.port, this.host, () => {
       logger.info(`Worldpay MCP HTTP server listening on ${this.host}:${this.port}`);
     });
 
-    server.on('error', (err) => {
+    this.httpServer.on('error', (err) => {
       logger.error(`HTTP server failed: ${err.message}`);
+    });
+  }
+
+  /** Stop the HTTP server and the session sweeper (used by tests and shutdown). */
+  public async close(): Promise<void> {
+    if (this.sweepTimer) clearInterval(this.sweepTimer);
+    for (const s of this.sessions.values()) {
+      await s.transport.close().catch(() => undefined);
+    }
+    this.sessions.clear();
+    await new Promise<void>((resolve) => {
+      if (!this.httpServer) return resolve();
+      this.httpServer.close(() => resolve());
     });
   }
 
