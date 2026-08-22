@@ -36,10 +36,17 @@ It is deliberately thin. There is no persistent state, no database, no business 
 
 ![Worldpay MCP Server by the numbers: 9 tools, 2 transports, 5 Worldpay APIs, 1 npx command](docs/assets/by-the-numbers.jpg)
 
+## Demo
+
+Listing the nine tools over MCP, each classified by its annotation — read-only queries in green, money-moving tools in red. No Worldpay call is made (dummy credentials). Reproduce with `bash scripts/demo.sh`.
+
+![Worldpay MCP listing its nine tools, classified by MCP annotation](docs/assets/demo.gif)
+
 ---
 
 ## Contents
 
+- [Demo](#demo)
 - [Architecture](#architecture)
 - [Request lifecycle](#request-lifecycle)
 - [Business flows](#business-flows)
