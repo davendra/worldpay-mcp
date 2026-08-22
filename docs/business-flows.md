@@ -122,7 +122,7 @@ sequenceDiagram
     end
 ```
 
-**Product:** [Verified Tokens](https://developer.worldpay.com/products/access/verified-tokens) via the Payments API. **Schema note:** `create_worldpay_token` and `take_guest_payment` share the same input schema; the token tool's description instructs the model to use `amount: 0`, `storeCard: true`, `createToken: true`. `tokenHref` and `sessionHref` are mutually exclusive (enforced at runtime), as are `cvc` and `cvcSessionHref` (stated in the description).
+**Product:** [Verified Tokens](https://developer.worldpay.com/products/access/verified-tokens) via the Payments API. **Schema note:** `create_worldpay_token` and `take_guest_payment` share the same input schema; the token tool's description instructs the model to use `amount: 0`, `storeCard: true`, `createToken: true`. Supply exactly one of `tokenHref` / `sessionHref`: the server throws only when **neither** is present, and if both are given `sessionHref` wins. `cvc` and `cvcSessionHref` are described as mutually exclusive.
 
 ---
 
@@ -134,13 +134,8 @@ After authorisation, Worldpay's response carries HAL `_links` naming the actions
 stateDiagram-v2
     [*] --> Authorized: take_guest_payment → 201 outcome authorized
     Authorized --> Settled: manage_payment settle
-    Authorized --> PartiallySettled: manage_payment partialSettle
     Authorized --> Cancelled: manage_payment cancel
-    PartiallySettled --> Settled: manage_payment settle (remainder)
-    PartiallySettled --> Cancelled: manage_payment cancel (remainder)
     Settled --> Refunded: manage_payment refund
-    Settled --> PartiallyRefunded: manage_payment partialRefund
-    PartiallyRefunded --> Refunded: manage_payment refund
     Settled --> Reversed: manage_payment reverse
     Refunded --> [*]
     Cancelled --> [*]

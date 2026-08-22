@@ -42,11 +42,13 @@ npx -y @modelcontextprotocol/inspector --cli node dist/server-stdio.js --method 
 
 ## Proposing a change
 
-1. Open an issue first for anything beyond a typo — it's the cheapest place to agree on scope.
+Worldpay has not published a formal contribution process; the suggestions below are conventions that keep a PR easy to review, not house rules.
+
+1. Consider opening an issue first for anything beyond a typo — the cheapest place to agree on scope.
 2. Branch from `main`; keep the PR to one concern.
-3. `npm run build && npm test` must pass; CI runs both on Node 20 and 22.
+3. `npm run build && npm test` should pass; the CI workflow added in this docs set runs both on Node 20 and 22.
 4. Update the docs that describe the behaviour you changed (`README.md`, `docs/tools.md`, `docs/architecture.md`). Docs describe what the code does; if they disagree with the code, fix one or the other in the same PR.
-5. Conventional-style commit messages are used in the history (`feat:`, `fix:`, `chore:`, `docs:`).
+5. The commit history is mixed but leans on conventional-style prefixes (`feat:`, `fix:`, `chore:`, `docs:`).
 
 ## Reporting
 

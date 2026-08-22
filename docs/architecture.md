@@ -102,7 +102,7 @@ classDiagram
 | **Transports** | `src/transports/StdioTransport.ts`, `HTTPTransport.ts`, `SSETransport.ts`, `ServerTransport.ts` | Move JSON-RPC between client and server |
 | **Server** | `src/worldpay-mcp-server.ts` | Extend the SDK's `McpServer`; own one `WorldpayAPI`; register the tools |
 | **Tools** | `src/tools/mcp-tool.ts` + `src/tools/{hpp,payments,payouts,sessions}/*.ts` | One class per tool: name, title, description, Zod shape, `execute()` |
-| **Schemas** | `src/schemas/schemas.ts` | Seven Zod objects shared by the nine tools (the two payment tools share `paymentSchema`) |
+| **Schemas** | `src/schemas/schemas.ts` | Eight Zod objects shared by the nine tools (the two payment tools share `paymentSchema`) |
 | **API client** | `src/api/worldpay.ts` | Build Worldpay requests, attach Basic auth, `fetch`, raise on non-success |
 | **Types** | `src/types/*.d.ts` | Generated typings for Worldpay's Payments, Payment Pages, Queries, Payouts and Sessions APIs |
 | **Utilities** | `src/utils/logger.ts`, `src/utils/mcp-response.ts` | Winston file logger; `ToolCallResponse` / `ToolCallResponseError` wrappers |
@@ -121,7 +121,7 @@ An Express 5 app on port **3001** (hard-coded in the entrypoint) exposing:
 
 | Route | Purpose |
 |---|---|
-| `POST /mcp` | JSON-RPC requests. A request without an `Mcp-Session-Id` header and with an `initialize` body creates a new session (`randomUUID()`), stored in an in-memory `Map`; subsequent requests must carry the header |
+| `POST /mcp` | JSON-RPC requests. A request without an `Mcp-Session-Id` header constructs a transport and connects it (a new session id is minted); subsequent requests carry the header. **The body is not inspected** to decide this, and the server binds only one session at a time — see the note below |
 | `GET /mcp` | Server-to-client event stream for an existing session |
 | `DELETE /mcp` | Ends a session |
 | `GET /healthz` | `{"status":"up"}` — liveness |
@@ -129,7 +129,7 @@ An Express 5 app on port **3001** (hard-coded in the entrypoint) exposing:
 
 Response hardening middleware sets a locked-down `Content-Security-Policy` (`default-src 'none'` …), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `X-XSS-Protection: 1; mode=block`, `Referrer-Policy: no-referrer`, and disables `x-powered-by`. CORS is enabled with `origin: process.env.CORS_ORIGIN || "*"` and exposes the `Mcp-Session-Id` header so browser clients can read it.
 
-Sessions are removed from the map when the SDK transport fires `onclose`. There is no session TTL.
+Sessions are held in an in-memory `Map` and removed when the SDK transport fires `onclose`; there is no TTL. **Single session per process:** the transport calls `this.server.connect(transport)` against one shared `WorldpayMCPServer` instance, and the SDK permits a server to be connected to only one transport at a time. A second concurrent `initialize` therefore fails — verified: the second call returns HTTP 500 `Internal Server Error`. Run one process per client; a stray non-initialize POST also consumes the single connection. This is an upstream limitation, not a deployment mistake.
 
 ### "SSE" — `src/server-sse.ts`
 
@@ -239,7 +239,7 @@ Errors reach the model as prose inside an `isError` result, built from the throw
 | `query_account_payouts` | `Payment failed: Payment Query failed with status {code}: {body}` | non-200, or an unexpected response shape |
 | `create_hosted_payment` | `Hosted Payment failed: Hosted payment transaction failed with status {code}: {body}` | non-200 |
 | `create_delegate_token` | `Delegate token failed: Creating a Delegate Token failed with status {code}: {body}` | non-201 |
-| any tool | `{prefix} Username and password required for Basic auth` | credentials missing from env |
+| any tool except `create_hosted_payment` | `{prefix} Username and password required for Basic auth` | credentials missing from env (the eight tools routed through `WorldpayAPI`; `create_hosted_payment` builds auth inline and instead surfaces a Worldpay 401) |
 | `take_guest_payment`, `create_worldpay_token` | `Payment failed: Either sessionHref or tokenHref must be provided` | neither instrument supplied |
 
 `{body}` is Worldpay's error JSON, serialised. That is useful — it carries Worldpay's `errorName`, `message` and validation detail — but note that it is passed unfiltered into the model's context. A non-JSON error body (an HTML gateway page, for instance) makes `response.json()` throw, and the resulting `SyntaxError` text becomes the message instead.
@@ -283,7 +283,7 @@ None are validated at start-up; the entrypoints use non-null assertions. A missi
 
 - **TypeScript 5.9**, `target`/`module` ES2022, `strict`, `noUnusedLocals`, path alias `@/* → src/*` rewritten at build time by `tsc-alias`. Output in `dist/`, which is what the npm package ships (`files: ["dist/**/*"]`).
 - `npm run build` = `tsc --build && tsc-alias`. `npm start` runs the HTTP server; the npm `bin` runs the stdio server.
-- **Runtime dependencies:** `@modelcontextprotocol/sdk` 1.26, `express` 5, `winston` 3, `dotenv` 16, `node-fetch` 3 (declared; the code uses global `fetch`). `zod` arrives transitively via the SDK. `cors` is imported by the HTTP transport but declared under `devDependencies` — fine for `npm install`, something to be aware of if you `npm prune --production` and then run the HTTP entrypoint.
+- **Runtime dependencies:** `@modelcontextprotocol/sdk` 1.26, `express` 5, `winston` 3, `dotenv` 16, `node-fetch` 3 (declared; the code uses global `fetch`). `zod` arrives transitively via the SDK. `cors` is imported by the HTTP transport but declared under `devDependencies`; in practice it still resolves after `npm prune --production` because it is also a production transitive dependency of the MCP SDK — worth tidying to a direct dependency nonetheless.
 - **Docker:** single-stage `node:20-alpine`; installs, copies, builds, strips `src/` and dev dependencies, `EXPOSE 3001`, `CMD ["node","dist/server-stdio.js"]`.
 - **Tests:** Jest 29 + `ts-jest` + `@fetch-mock/jest`; `testMatch: **/*.test.ts`; path alias mapped from `tsconfig`. `npm test` passes on Node 20 and 22 without extra flags.
 

@@ -57,8 +57,8 @@ Three things follow:
 | How the client reaches it | Launches it as a child process; talks over stdin/stdout | Connects to `http://host:3001/mcp` |
 | Who can call it | Only the process that spawned it | Anything that can reach the port |
 | Built-in caller authentication | Not needed — inherits the launching user's session | **None.** The HTTP transport hardens its *responses* (strict CSP, `nosniff`, `X-Frame-Options: DENY`, `no-referrer`, no `x-powered-by`) but does not authenticate *requests* |
-| Sessions | n/a | In-memory `Mcp-Session-Id` map, no TTL |
-| Recommended for | Local assistants — Claude Code, Claude Desktop, Cursor, Codex | Shared/remote deployment **behind a reverse proxy that authenticates** (mTLS, OAuth, a signed header from your gateway) and on a private network |
+| Sessions | n/a | In-memory `Mcp-Session-Id` map, no TTL; **one concurrent session per process** (a second `initialize` returns HTTP 500) |
+| Recommended for | Local assistants — Claude Code, Claude Desktop, Cursor, Codex | A single remote client, **behind a reverse proxy that authenticates** (mTLS, OAuth, a signed header from your gateway), on a private network. Not a shared multi-client endpoint — it binds one session per process |
 
 **Default to stdio.** It is the only configuration in which "who can call the server" is answered by the operating system rather than by something you have to build. If you do run HTTP, bind it to a private interface, put authentication in front of it, set `CORS_ORIGIN` to the exact origin of your client, and monitor `/healthz`.
 
@@ -86,7 +86,7 @@ The server is designed so that, for the main flows, **no primary account number 
 
 - `take_guest_payment` and `create_worldpay_token` take a **`sessionHref`** (Worldpay's Checkout SDK tokenised the card in the browser) or a **`tokenHref`** (a previously created Worldpay token). The agent handles references, not card numbers. A CVC can be supplied as `cvcSessionHref` for the same reason — prefer it over the raw `cvc` field.
 - `create_hosted_payment` moves the entire card interaction onto Worldpay's hosted page.
-- The four `query_*` tools return Worldpay's masked representations.
+- The four `query_*` tools return Worldpay's own query responses (card details masked; the payout query, however, returns beneficiary bank details — see below).
 
 **The exception is `create_delegate_token`.** Its ACP schema allows `payment_method.card_number_type: "fpan"` with `number` as a full card number and an optional `cvc`. When used that way, the PAN and CVC are **produced by the model as tool arguments**, which means they transit the model's context window and the client's conversation log, and are then forwarded by the server unchanged. Before enabling this tool outside a sandbox:
 

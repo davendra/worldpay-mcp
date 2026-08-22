@@ -10,7 +10,6 @@
 **A [Model Context Protocol](https://modelcontextprotocol.io/) server that lets AI agents and coding assistants take payments, manage them, create tokens, generate pay-by-link pages and query payment history through [Access Worldpay](https://developer.worldpay.com/) — nine tools, two transports, one `npx` command.**
 
 [![npm version](https://img.shields.io/npm/v/%40worldpay%2Fworldpay-mcp?logo=npm&logoColor=white&color=ff1f3e)](https://www.npmjs.com/package/@worldpay/worldpay-mcp)
-[![CI](https://github.com/davendra/worldpay-mcp/actions/workflows/ci.yml/badge.svg?branch=docs%2Fcomprehensive-guide)](https://github.com/davendra/worldpay-mcp/actions/workflows/ci.yml)
 ![MCP SDK 1.26](https://img.shields.io/badge/MCP_SDK-1.26-4c12a1)
 ![TypeScript 5.9](https://img.shields.io/badge/TypeScript-5.9-1b1b6f?logo=typescript&logoColor=white)
 ![Node 20+](https://img.shields.io/badge/Node-20%2B-11a871?logo=node.js&logoColor=white)
@@ -31,7 +30,7 @@
 
 An AI client (Claude Code, Claude Desktop, Cursor, Codex — anything that speaks MCP) connects to this server and gains nine **tools**. Each tool wraps one Access Worldpay capability: creating a hosted payment page, taking a card payment from a Checkout session or stored token, tokenising a card, acting on a payment (settle, cancel, refund), searching payments and payouts, and minting an Agentic Commerce Protocol delegate token. The server translates the model's structured tool call into an authenticated HTTPS request to Worldpay and returns Worldpay's response verbatim as the tool result.
 
-It is deliberately thin. There is no state, no database, no business logic beyond building the request — which is exactly what you want in the component that sits between a language model and a payment rail.
+It is deliberately thin. There is no persistent state, no database, no business logic beyond building the request — which is exactly what you want in the component that sits between a language model and a payment rail.
 
 ![Worldpay MCP Server by the numbers: 9 tools, 2 transports, 5 Worldpay APIs, 1 npx command](docs/assets/by-the-numbers.jpg)
 
@@ -241,7 +240,7 @@ curl -s http://localhost:3001/readyz    # {"status":"ready"}
 
 ### Option C — Docker
 
-The image builds the project and runs the **stdio** server (the `EXPOSE 3001` in the Dockerfile is inherited from the HTTP variant and is not used by the default command):
+The image builds the project and runs the **stdio** server (the `EXPOSE 3001` in the Dockerfile is not used by the default command):
 
 ```bash
 docker build -t worldpay/mcp .
@@ -372,7 +371,7 @@ MERCHANT_ENTITY = "your-merchant-entity"
 <details>
 <summary><b>Streamable HTTP clients</b> — any host that supports remote MCP</summary>
 
-Run `npm start` (or the Docker HTTP variant) and point the client at `http://localhost:3001/mcp`. The server issues an `Mcp-Session-Id` on initialise and expects it on subsequent requests. **The HTTP transport has no built-in authentication** — it is designed to run on a trusted network or behind a proxy that authenticates callers; see [Security](docs/security.md#choosing-a-transport).
+Run `npm start` (or the Docker HTTP variant) and point the client at `http://localhost:3001/mcp`. The server issues an `Mcp-Session-Id` on initialise and expects it on subsequent requests. **One caveat:** the current build binds a single MCP session per process — a second concurrent `initialize` returns HTTP 500 (`Internal Server Error`), so run one process per client rather than sharing one across many. **The HTTP transport also has no built-in authentication** — it is designed to run on a trusted network or behind a proxy that authenticates callers; see [Security](docs/security.md#choosing-a-transport).
 </details>
 
 ---
@@ -424,7 +423,7 @@ Short version — the long version is **[docs/security.md](docs/security.md)**.
 npm test
 ```
 
-Five Jest suites (`ts-jest`, `@fetch-mock/jest`) exercise `create_hosted_payment`, `take_guest_payment`, `manage_payment`, `query_payments_by_date` and `query_account_payouts` against mocked Worldpay responses — no network, no credentials. They pass on Node 20 and 22 with the plain command above; the CI workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs build + test on both.
+Five Jest suites (`ts-jest`, `@fetch-mock/jest`) exercise `create_hosted_payment`, `take_guest_payment`, `manage_payment`, `query_payments_by_date` and `query_account_payouts` against mocked Worldpay responses — no network, no credentials. They pass with the plain command above (verified on Node 22); the CI workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs build + test on Node 20 and 22.
 
 ---
 

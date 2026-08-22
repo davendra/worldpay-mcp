@@ -57,7 +57,7 @@ The problems a first-time user actually hits, in the order they tend to hit them
 
 | Message | Missing |
 |---|---|
-| `… failed: Username and password required for Basic auth` (prefix varies by tool — `Payment failed:`, `Query failed:`, …) | `WORLDPAY_USERNAME` or `WORLDPAY_PASSWORD` |
+| `… failed: Username and password required for Basic auth` (prefix varies by tool; **not** `create_hosted_payment`, which instead returns `Hosted Payment failed: … status 401`) | `WORLDPAY_USERNAME` or `WORLDPAY_PASSWORD` |
 | `… fetch failed` / `TypeError: Failed to parse URL from undefined/api/payments` | `WORLDPAY_URL` |
 | Worldpay 400 mentioning `entity` | `MERCHANT_ENTITY` (sent as the string `"undefined"`) |
 
@@ -121,7 +121,7 @@ It is `.gitignore`d, so it won't be committed — but it will appear in your rep
 
 ## The HTTP server answers `/healthz` but `/mcp` returns 400
 
-**Cause.** Streamable HTTP requires a session. The first request must be an `initialize` **without** an `Mcp-Session-Id` header; the response carries `Mcp-Session-Id`, which every later request must send back. A `POST /mcp` with a non-initialize body and no session header is rejected with `400 Invalid or missing session ID` (`src/transports/HTTPTransport.ts`).
+**Cause.** Streamable HTTP requires a session. The first request must be an `initialize` **without** an `Mcp-Session-Id` header; the response carries `Mcp-Session-Id`, which every later request must send back. A `POST /mcp` with no session header and a non-initialize body is answered by the SDK with `400` and body `Bad Request: Server not initialized`. (The message `Invalid or missing session ID` comes from the GET/DELETE handler, not POST.)
 
 **Fix.** Use an MCP client that implements Streamable HTTP rather than raw `curl`; or, for a smoke test:
 
@@ -137,7 +137,7 @@ and reuse the `mcp-session-id` header it returns. Sessions live in memory and va
 
 ## Docker: nothing listens on 3001
 
-**Cause.** The image's `CMD` runs the **stdio** server (`node dist/server-stdio.js`). `EXPOSE 3001` in the Dockerfile is vestigial. The upstream README's "available on port 3001" refers to the HTTP entrypoint, which the image doesn't start by default.
+**Cause.** The image's `CMD` runs the **stdio** server (`node dist/server-stdio.js`). `EXPOSE 3001` in the Dockerfile is not used by the default command. The upstream README's "available on port 3001" refers to the HTTP entrypoint, which the image doesn't start by default.
 
 **Fix.** For stdio, run with `-i` and let your MCP client talk to the container's stdin/stdout. For HTTP, override the command:
 
@@ -145,7 +145,7 @@ and reuse the `mcp-session-id` header it returns. Sessions live in memory and va
 docker run --rm -p 3001:3001 --env-file .env worldpay/mcp node dist/server-http.js
 ```
 
-Also note the README builds the image as `worldpay/mcp` but runs `localhost/worldpay/mcp:latest`; use the same tag for both.
+Note also that the original upstream README built the image as `worldpay/mcp` but ran `localhost/worldpay/mcp:latest`; use the same tag for both.
 
 ---
 

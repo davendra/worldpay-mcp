@@ -252,7 +252,7 @@ All inputs optional except where a default is shown. Descriptions are the schema
 | `sourceCurrency`, `targetCurrency` | string | ISO 4217 alpha-3 |
 | `sourceAmount`, `targetAmount` | number | 18-digit precision including 2 decimal places |
 
-**Request:** `GET {WORLDPAY_URL}/paymentQueries/payments?{every non-empty input}&entity={MERCHANT_ENTITY}`, `Accept: application/vnd.worldpay.payment-queries-v1.hal+json`. **Success:** 200; the tool reads `items` from the response and returns it. Payout records include beneficiary bank details (IBAN, account number, SWIFT/BIC, payee name) — these reach the model. **Failure prefix:** `Payment failed: …`.
+**Request:** `GET {WORLDPAY_URL}/paymentQueries/payments?{every non-empty input}&entity={MERCHANT_ENTITY}`, `Accept: application/vnd.worldpay.payment-queries-v1.hal+json`. **Success:** 200; the tool returns the whole response, and returns the string `"No payouts found for the given criteria."` when the body has an empty `items` array. Note the code inspects `response.items`, so a response shaped as an `_embedded.payments` array (the shape the shared query helper unwraps to) makes it throw, surfacing as `Payment failed: Cannot read properties of undefined (reading 'length')` — see [architecture → design properties](architecture.md#design-properties-worth-knowing). Payout records include beneficiary bank details (IBAN, account number, SWIFT/BIC, payee name) — these reach the model. **Failure prefix:** `Payment failed: …`.
 
 **Example call**
 
