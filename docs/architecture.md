@@ -121,7 +121,7 @@ An Express 5 app on port **3001** (hard-coded in the entrypoint) exposing:
 
 | Route | Purpose |
 |---|---|
-| `POST /mcp` | JSON-RPC requests. A request without an `Mcp-Session-Id` header constructs a transport and connects it (a new session id is minted); subsequent requests carry the header. **The body is not inspected** to decide this, and the server binds only one session at a time — see the note below |
+| `POST /mcp` | JSON-RPC requests. A request without an `Mcp-Session-Id` header constructs a transport and connects it (an `initialize` body gets a new session id; a non-initialize body is rejected by the SDK first); subsequent requests carry the header. **The body is not inspected** to choose this path, and the server binds only one session at a time — see the note below |
 | `GET /mcp` | Server-to-client event stream for an existing session |
 | `DELETE /mcp` | Ends a session |
 | `GET /healthz` | `{"status":"up"}` — liveness |
@@ -285,7 +285,7 @@ None are validated at start-up; the entrypoints use non-null assertions. A missi
 - `npm run build` = `tsc --build && tsc-alias`. `npm start` runs the HTTP server; the npm `bin` runs the stdio server.
 - **Runtime dependencies:** `@modelcontextprotocol/sdk` 1.26, `express` 5, `winston` 3, `dotenv` 16, `node-fetch` 3 (declared; the code uses global `fetch`). `zod` arrives transitively via the SDK. `cors` is imported by the HTTP transport but declared under `devDependencies`; in practice it still resolves after `npm prune --production` because it is also a production transitive dependency of the MCP SDK — worth tidying to a direct dependency nonetheless.
 - **Docker:** single-stage `node:20-alpine`; installs, copies, builds, strips `src/` and dev dependencies, `EXPOSE 3001`, `CMD ["node","dist/server-stdio.js"]`.
-- **Tests:** Jest 29 + `ts-jest` + `@fetch-mock/jest`; `testMatch: **/*.test.ts`; path alias mapped from `tsconfig`. `npm test` passes on Node 20 and 22 without extra flags.
+- **Tests:** Jest 29 + `ts-jest` + `@fetch-mock/jest`; `testMatch: **/*.test.ts`; path alias mapped from `tsconfig`. `npm test` passes without extra flags (verified on Node 22; CI runs it on 20 and 22).
 
 ---
 
@@ -295,7 +295,7 @@ Stated neutrally — these are the facts you design around.
 
 | Property | Current behaviour | Implication |
 |---|---|---|
-| Statelessness | No DB, no cache; HTTP sessions only in memory | Horizontally trivial; HTTP sessions don't survive a restart |
+| Statelessness | No DB, no cache; HTTP sessions only in memory | Trivial to run many processes, though each binds one session (see the single-session note above); HTTP sessions don't survive a restart |
 | Idempotency | No idempotency key header; `transactionReference` is a millisecond timestamp the caller can't set | Retrying a failed `take_guest_payment` can create a second payment; two calls in the same millisecond share a reference |
 | Timeouts / retries | None; one `fetch`, no `AbortSignal` | A slow upstream call blocks the tool call until the client gives up |
 | Rate limiting | None on either side | Put limits in the client or a proxy if agents will loop |

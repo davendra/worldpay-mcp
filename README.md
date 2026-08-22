@@ -166,7 +166,7 @@ The nine tools compose into six merchant scenarios. Each is drawn as a sequence 
 | 1 | **Pay by Link** — generate a hosted payment page, send the link, confirm payment | `create_hosted_payment` → `query_payment_by_id` | Sales / support assistant |
 | 2 | **Guest card payment** — charge a card captured by Checkout, then settle | `take_guest_payment` → `manage_payment` | Order-taking agent |
 | 3 | **Tokenise, then charge later** — verify a card at £0, store the token, charge on demand | `create_worldpay_token` → `take_guest_payment` (with `tokenHref`) | Subscription / repeat-billing agent |
-| 4 | **Payment lifecycle** — settle, partially settle, cancel, refund, reverse via HAL action links | `manage_payment` | Operations agent |
+| 4 | **Payment lifecycle** — settle, cancel, refund, reverse via HAL action links | `manage_payment` | Operations agent |
 | 5 | **Reconciliation & support** — search by date, reference or ID; list payouts | `query_payments_by_date` · `query_payments_by_transaction_reference` · `query_payment_by_id` · `query_account_payouts` | Finance / customer-service assistant (read-only) |
 | 6 | **Agentic Commerce** — mint a delegated payment token for an ACP checkout session | `create_delegate_token` | Shopping agent |
 

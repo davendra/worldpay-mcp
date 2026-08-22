@@ -131,7 +131,7 @@ curl -s -D - http://localhost:3001/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"0"}}}'
 ```
 
-and reuse the `mcp-session-id` header it returns. Sessions live in memory and vanish on restart.
+and reuse the `mcp-session-id` header it returns. **If you already sent a stray non-initialize POST to this process, restart the server first** — that rejected request has already consumed the single available session, and this `initialize` will otherwise return 500. Sessions live in memory and vanish on restart.
 
 ---
 
@@ -175,7 +175,7 @@ Note also that the original upstream README built the image as `worldpay/mcp` bu
 
 ## Tests: `npm test` fails with an ESM or path-alias error
 
-**Expected.** On a clean clone with Node 20 or 22, `npm install && npm test` passes all five suites without flags (`ts-jest` with `moduleNameMapper` generated from `tsconfig` paths in `jest.config.ts`).
+**Expected.** On a clean clone, `npm install && npm test` passes all five suites without flags (verified on Node 22; CI covers 20 and 22) (`ts-jest` with `moduleNameMapper` generated from `tsconfig` paths in `jest.config.ts`).
 
 **If it doesn't:**
 
