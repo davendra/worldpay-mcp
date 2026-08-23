@@ -9,7 +9,7 @@
 
 **A [Model Context Protocol](https://modelcontextprotocol.io/) server that lets AI agents and coding assistants take payments, manage them, create tokens, generate pay-by-link pages and query payment history through [Access Worldpay](https://developer.worldpay.com/) — nine tools, two transports, one `npx` command.**
 
-[![npm version](https://img.shields.io/npm/v/%40worldpay%2Fworldpay-mcp?logo=npm&logoColor=white&color=ff1f3e)](https://www.npmjs.com/package/@worldpay/worldpay-mcp)
+[![Release v1.2.0](https://img.shields.io/badge/release-v1.2.0-ff1f3e)](https://github.com/davendra/worldpay-mcp/releases/tag/v1.2.0)
 [![CI](https://github.com/davendra/worldpay-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/davendra/worldpay-mcp/actions/workflows/ci.yml)
 ![MCP SDK 1.30](https://img.shields.io/badge/MCP_SDK-1.30-4c12a1)
 ![Security hardened](https://img.shields.io/badge/security-hardened-11a871)
